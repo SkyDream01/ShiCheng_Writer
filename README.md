@@ -88,7 +88,6 @@ ShiCheng_Writer/
         ```bash
         pip install PySide6
         ```
-      * (建议) 为了方便他人使用，您可以在项目根目录创建一个 `requirements.txt` 文件，列出所有依赖。
 
 3.  **运行程序**:
 
