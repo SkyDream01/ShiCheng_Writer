@@ -1,4 +1,4 @@
-# shicheng_writer/main_window.py
+# ShiCheng_Writer/main_window.py
 import sys
 import os
 import shutil

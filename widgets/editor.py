@@ -1,4 +1,4 @@
-# shicheng_writer/widgets/editor.py
+# ShiCheng_Writer/widgets/editor.py
 from PySide6.QtWidgets import QTextEdit, QApplication
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
 from PySide6.QtCore import QRegularExpression, Qt

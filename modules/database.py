@@ -1,10 +1,10 @@
-# shicheng_writer/modules/database.py
+# ShiCheng_Writer/modules/database.py
 import sqlite3
 import os
 import json
 from datetime import datetime
 
-DB_FILE = "shicheng_writer.db"
+DB_FILE = "ShiCheng_Writer.db"
 
 def get_db_connection():
     """获取数据库连接"""

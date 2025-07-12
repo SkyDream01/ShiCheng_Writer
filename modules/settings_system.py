@@ -1,4 +1,4 @@
-# shicheng_writer/modules/settings_system.py
+# ShiCheng_Writer/modules/settings_system.py
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QTreeView, QPushButton, 
                                QLineEdit, QComboBox, QTextEdit, QDialog, 
                                QFormLayout, QDialogButtonBox, QLabel)

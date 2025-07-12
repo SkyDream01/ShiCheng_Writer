@@ -1,4 +1,4 @@
-# shicheng_writer/modules/inspiration.py
+# ShiCheng_Writer/modules/inspiration.py
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QPushButton, QLabel, QTabWidget, 
                                QListWidget, QListWidgetItem, QInputDialog, QMessageBox,
                                QTreeView, QMenu)

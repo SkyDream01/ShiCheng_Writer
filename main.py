@@ -1,4 +1,4 @@
-# shicheng_writer/main.py
+# ShiCheng_Writer/main.py
 import sys
 import os
 from PySide6.QtWidgets import QApplication

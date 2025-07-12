@@ -1,4 +1,4 @@
-# shicheng_writer/modules/theme_manager.py
+# ShiCheng_Writer/modules/theme_manager.py
 import os
 from PySide6.QtWidgets import QApplication
 
