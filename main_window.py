@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QTreeView, QMessageBox, QInputDialog, QFileDialog,
                                QToolBar, QLabel, QMenu, QPushButton, QStatusBar, QToolButton,
                                QDialog, QDialogButtonBox, QApplication, QFormLayout, QLineEdit, QTextEdit)
-from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence
 from PySide6.QtCore import Qt, QSize, QTimer
 
 # 从新的模块导入，打破循环依赖
@@ -217,25 +217,102 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.load_books()
         self.setup_auto_backup()
+        
+        # 新增：用于计算打字速度
+        self.typing_timer = QTimer(self)
+        self.typing_timer.timeout.connect(self.update_typing_speed)
+        self.last_char_count = 0
+        self.typing_speed = 0
 
     def setup_ui(self):
-        # ... (此函数无需修改，保持原样)
         self.splitter = QSplitter(Qt.Horizontal)
+        
+        # 编辑器和其下方状态栏的容器
+        editor_container = QWidget()
+        editor_layout = QVBoxLayout(editor_container)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(0)
+
         self.editor = Editor()
-        self.editor.textChanged.connect(self.on_text_changed)
+        
+        # 创建新的状态栏
+        self.editor_status_bar = QStatusBar()
+        self.word_count_label = QLabel("字数: 0")
+        self.typing_speed_label = QLabel("速度: 0 字/分")
+        self.editor_status_bar.addPermanentWidget(self.word_count_label)
+        self.editor_status_bar.addPermanentWidget(self.typing_speed_label)
+
+        editor_layout.addWidget(self.editor)
+        editor_layout.addWidget(self.editor_status_bar)
+
+        self.splitter.addWidget(editor_container)
+
+        # 右侧面板保持不变
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
-        self.word_count_label = QLabel("字数: 0")
-        right_layout.addWidget(self.word_count_label)
+        # 您可以在这里添加其他需要的功能，或者保持为空
         right_layout.addStretch()
-        self.splitter.addWidget(self.editor)
+
         self.splitter.addWidget(right_panel)
         self.splitter.setSizes([900, 300]) 
         self.setCentralWidget(self.splitter)
+        
+        # 在创建Toolbar之前，先创建Action，以便连接信号
+        self.setup_actions()
         self.setup_docks()
         self.setup_toolbar()
+        
+        # 连接信号
+        self.editor.textChanged.connect(self.on_text_changed)
+        self.editor.undoAvailable.connect(self.undo_action.setEnabled)
+        self.editor.redoAvailable.connect(self.redo_action.setEnabled)
+
+        # 应用主状态栏
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage("欢迎使用诗成写作！")
+
+    def setup_actions(self):
+        """统一管理所有Action的创建"""
+        self.add_book_action = QAction("新建书籍", self)
+        self.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
+        self.add_book_action.triggered.connect(self.add_new_book)
+
+        self.add_chapter_action = QAction("新建章节", self)
+        self.add_chapter_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        self.add_chapter_action.triggered.connect(self.add_new_chapter)
+        self.add_chapter_action.setEnabled(False)
+
+        self.save_action = QAction("保存", self)
+        self.save_action.setShortcut(QKeySequence("Ctrl+S"))
+        self.save_action.triggered.connect(self.save_current_chapter)
+
+        self.export_action = QAction("导出书籍", self)
+        self.export_action.setShortcut(QKeySequence("Ctrl+E"))
+        self.export_action.triggered.connect(lambda: self.export_book(self.current_book_id))
+        self.export_action.setEnabled(False)
+        
+        self.undo_action = QAction("撤销", self)
+        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.triggered.connect(self.editor.undo)
+        self.undo_action.setEnabled(False)
+
+        self.redo_action = QAction("重做", self)
+        self.redo_action.setShortcut(QKeySequence("Ctrl+Y"))
+        self.redo_action.triggered.connect(self.editor.redo)
+        self.redo_action.setEnabled(False)
+
+        self.indent_action = QAction("全文缩进", self)
+        self.indent_action.setShortcut(QKeySequence("Ctrl+I"))
+        self.indent_action.triggered.connect(self.auto_indent_document)
+
+        self.unindent_action = QAction("取消缩进", self)
+        self.unindent_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
+        self.unindent_action.triggered.connect(self.auto_unindent_document)
+        
+        self.toggle_theme_action = QAction("切换亮/暗主题", self)
+        self.toggle_theme_action.setShortcut(QKeySequence("F11"))
+        self.toggle_theme_action.triggered.connect(self.toggle_theme)
+
 
     def setup_toolbar(self):
         toolbar = QToolBar("主工具栏")
@@ -247,28 +324,12 @@ class MainWindow(QMainWindow):
         file_button.setPopupMode(QToolButton.InstantPopup)
         file_menu = QMenu(file_button)
 
-        add_book_action = QAction("新建书籍", self)
-        add_book_action.triggered.connect(self.add_new_book)
-        file_menu.addAction(add_book_action)
-
-        self.add_chapter_action = QAction("新建章节", self)
-        self.add_chapter_action.triggered.connect(self.add_new_chapter)
-        self.add_chapter_action.setEnabled(False)
+        file_menu.addAction(self.add_book_action)
         file_menu.addAction(self.add_chapter_action)
-        
         file_menu.addSeparator()
-
-        save_action = QAction("保存", self)
-        save_action.triggered.connect(self.save_current_chapter)
-        file_menu.addAction(save_action)
-
+        file_menu.addAction(self.save_action)
         file_menu.addSeparator()
-        
-        self.export_action = QAction("导出书籍", self)
-        self.export_action.triggered.connect(lambda: self.export_book(self.current_book_id))
-        self.export_action.setEnabled(False)
         file_menu.addAction(self.export_action)
-        
         file_menu.addSeparator()
 
         backup_now_action = QAction("立即备份", self)
@@ -288,13 +349,11 @@ class MainWindow(QMainWindow):
         edit_button.setPopupMode(QToolButton.InstantPopup)
         edit_menu = QMenu(edit_button)
 
-        indent_action = QAction("全文缩进", self)
-        indent_action.triggered.connect(self.auto_indent_document)
-        edit_menu.addAction(indent_action)
-
-        unindent_action = QAction("取消缩进", self)
-        unindent_action.triggered.connect(self.auto_unindent_document)
-        edit_menu.addAction(unindent_action)
+        edit_menu.addAction(self.undo_action)
+        edit_menu.addAction(self.redo_action)
+        edit_menu.addSeparator()
+        edit_menu.addAction(self.indent_action)
+        edit_menu.addAction(self.unindent_action)
 
         edit_button.setMenu(edit_menu)
         toolbar.addWidget(edit_button)
@@ -325,9 +384,7 @@ class MainWindow(QMainWindow):
         
         view_menu.addSeparator()
         
-        toggle_theme_action = QAction("切换亮/暗主题", self)
-        toggle_theme_action.triggered.connect(self.toggle_theme)
-        view_menu.addAction(toggle_theme_action)
+        view_menu.addAction(self.toggle_theme_action)
 
         view_button.setMenu(view_menu)
         toolbar.addWidget(view_button)
@@ -468,6 +525,7 @@ class MainWindow(QMainWindow):
             self.editor.clear()
             self.current_chapter_id = None
             self.word_count_label.setText("字数: 0")
+            self.typing_speed_label.setText("速度: 0 字/分")
     def open_book_menu(self, position):
         index = self.book_tree.indexAt(position)
         if not index.isValid():
@@ -633,7 +691,14 @@ class MainWindow(QMainWindow):
             self.editor.blockSignals(False)
             self.is_text_changed = False
             self.word_count_label.setText(f"字数: {count}")
+            self.typing_speed_label.setText("速度: 0 字/分")
             self.statusBar().showMessage(f"已打开章节: {item.text()}", 3000)
+
+            # 开始计算打字速度
+            self.last_char_count = count
+            if not self.typing_timer.isActive():
+                self.typing_timer.start(5000) # 每5秒更新一次
+
     def add_new_chapter(self):
         if self.current_book_id is None:
             QMessageBox.warning(self, "提示", "请先选择一本书籍！")
@@ -705,6 +770,22 @@ class MainWindow(QMainWindow):
             content = self.editor.toPlainText()
             count = len(content.strip())
             self.word_count_label.setText(f"字数: {count}*")
+    
+    def update_typing_speed(self):
+        if not self.current_chapter_id:
+            self.typing_speed = 0
+            self.typing_timer.stop()
+            return
+
+        current_char_count = len(self.editor.toPlainText().strip())
+        chars_typed = current_char_count - self.last_char_count
+        
+        # 5秒内输入了 chars_typed 个字符，换算成每分钟
+        self.typing_speed = (chars_typed / 5) * 60
+
+        self.typing_speed_label.setText(f"速度: {int(self.typing_speed)} 字/分")
+        self.last_char_count = current_char_count
+
     def closeEvent(self, event):
         if self.is_text_changed:
             reply = QMessageBox.question(self, "退出提示", "当前章节有未保存的修改，是否保存？",
@@ -715,8 +796,11 @@ class MainWindow(QMainWindow):
             elif reply == QMessageBox.Cancel:
                 event.ignore()
                 return
+        
+        self.typing_timer.stop() # 关闭应用时停止计时器
         self.data_manager.close()
         event.accept()
+        
     def setup_auto_backup(self):
         self.backup_timer = QTimer(self)
         self.backup_timer.timeout.connect(self.run_scheduled_backup)
