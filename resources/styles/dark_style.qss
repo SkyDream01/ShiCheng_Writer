@@ -1,0 +1,169 @@
+/* Dark Theme for Biluo Writer */
+QWidget {
+    background-color: #2b2b2b;
+    color: #f0f0f0;
+    border: none;
+    font-family: "Microsoft YaHei", "SimSun", sans-serif;
+}
+
+QMainWindow, QDialog {
+    background-color: #2b2b2b;
+}
+
+QTextEdit, QLineEdit {
+    background-color: #3c3c3c;
+    color: #f0f0f0;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 5px;
+}
+
+QTextEdit:focus, QLineEdit:focus {
+    border: 1px solid #007acc;
+}
+
+QPushButton {
+    background-color: #555;
+    color: #f0f0f0;
+    border: 1px solid #666;
+    padding: 5px 15px;
+    border-radius: 4px;
+    min-height: 20px;
+}
+
+QPushButton:hover {
+    background-color: #666;
+}
+
+QPushButton:pressed {
+    background-color: #444;
+}
+
+QListWidget, QTreeView {
+    background-color: #3c3c3c;
+    color: #f0f0f0;
+    border: 1px solid #555;
+    border-radius: 4px;
+}
+
+QListWidget::item:hover, QTreeView::item:hover {
+    background-color: #4a4a4a;
+}
+
+QListWidget::item:selected, QTreeView::item:selected {
+    background-color: #007acc;
+    color: #f0f0f0;
+}
+
+QHeaderView::section {
+    background-color: #444;
+    color: #f0f0f0;
+    padding: 4px;
+    border: 1px solid #555;
+}
+
+QDockWidget {
+    titlebar-close-icon: url(close.png);
+    titlebar-normal-icon: url(undock.png);
+}
+
+QDockWidget::title {
+    background-color: #444;
+    text-align: left;
+    padding: 5px;
+}
+
+QSplitter::handle {
+    background-color: #444;
+}
+
+QSplitter::handle:horizontal {
+    width: 1px;
+}
+
+QSplitter::handle:vertical {
+    height: 1px;
+}
+
+QToolBar {
+    background-color: #3c3c3c;
+    border: none;
+}
+
+QToolButton {
+    background-color: transparent;
+    color: #f0f0f0;
+    padding: 5px;
+}
+
+QToolButton:hover {
+    background-color: #555;
+}
+
+QToolButton:pressed {
+    background-color: #444;
+}
+
+QToolButton::menu-indicator {
+    image: none;
+}
+
+QMenu {
+    background-color: #3c3c3c;
+    color: #f0f0f0;
+    border: 1px solid #555;
+}
+
+QMenu::item:selected {
+    background-color: #007acc;
+}
+
+QStatusBar {
+    background-color: #3c3c3c;
+}
+
+QComboBox {
+    border: 1px solid #555;
+    border-radius: 3px;
+    padding: 1px 18px 1px 3px;
+    min-width: 6em;
+}
+
+QComboBox:editable {
+    background: #3c3c3c;
+}
+
+QComboBox:!editable, QComboBox::drop-down:editable {
+     background: #3c3c3c;
+}
+
+QComboBox QAbstractItemView {
+    border: 2px solid #555;
+    selection-background-color: #007acc;
+}
+
+QScrollBar:vertical {
+    border: 1px solid #555;
+    background: #3c3c3c;
+    width: 10px;
+    margin: 0px 0px 0px 0px;
+}
+QScrollBar::handle:vertical {
+    background: #666;
+    min-height: 20px;
+}
+
+QScrollBar:horizontal {
+    border: 1px solid #555;
+    background: #3c3c3c;
+    height: 10px;
+    margin: 0px 0px 0px 0px;
+}
+QScrollBar::handle:horizontal {
+    background: #666;
+    min-width: 20px;
+}
+
+QTextEdit {
+    font-size: 16px;
+}
