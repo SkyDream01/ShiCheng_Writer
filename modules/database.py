@@ -111,7 +111,6 @@ def initialize_database():
     if 'lastEditTime' not in columns:
         cursor.execute("ALTER TABLE chapters ADD COLUMN lastEditTime INTEGER")
 
-    print("数据库初始化成功！")
     conn.commit()
     conn.close()
 
@@ -165,10 +164,12 @@ class DataManager:
         
     def add_book_from_backup(self, book_data):
         cursor = self.conn.cursor()
+        backup_id = book_data.get('id')
         cursor.execute("""
-            INSERT INTO books (title, description, "group", createTime, lastEditTime) 
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO books (id, title, description, "group", createTime, lastEditTime) 
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
+            backup_id,
             book_data.get('name', '无标题'), 
             book_data.get('summary', ''), 
             book_data.get('group', '未分组'), 
@@ -176,7 +177,9 @@ class DataManager:
             book_data.get('lastEditTime', book_data.get('createTime'))
         ))
         self.conn.commit()
-        return cursor.lastrowid
+        if backup_id is None:
+            return cursor.lastrowid
+        return backup_id
 
     def update_book(self, book_id, title, description, cover_path, group):
         cursor = self.conn.cursor()
@@ -294,6 +297,11 @@ class DataManager:
         else:
              cursor.execute("SELECT * FROM settings WHERE book_id IS NULL")
         return [dict(row) for row in cursor.fetchall()]
+        
+    def get_all_settings(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM settings")
+        return [dict(row) for row in cursor.fetchall()]
 
     def get_setting_details(self, setting_id):
         cursor = self.conn.cursor()
@@ -323,6 +331,14 @@ class DataManager:
             return cursor.lastrowid
         except sqlite3.IntegrityError:
             return None
+            
+    def add_setting_from_backup(self, setting_data):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO settings (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
+                       (setting_data['id'], setting_data['name'], setting_data['type'], 
+                        setting_data['description'], setting_data['content'], setting_data['book_id']))
+        self.conn.commit()
+
 
     def update_setting(self, setting_id, name, type, description, content=None):
         try:
@@ -335,6 +351,7 @@ class DataManager:
             self.conn.commit()
             return True
         except Exception as e:
+            # 保持这个print用于调试关键错误
             print(f"数据库更新设定失败: {e}")
             return False
 
@@ -345,6 +362,7 @@ class DataManager:
             self.conn.commit()
             return True
         except Exception as e:
+            # 保持这个print用于调试关键错误
             print(f"删除设定失败: {e}")
             return False
 
@@ -370,16 +388,33 @@ class DataManager:
         cursor.execute("SELECT * FROM inspiration_fragments ORDER BY created_at DESC")
         return [dict(row) for row in cursor.fetchall()]
         
+    def get_all_inspiration_fragments(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM inspiration_fragments")
+        return [dict(row) for row in cursor.fetchall()]
+        
     def add_inspiration_fragment(self, type, content, source=""):
         cursor = self.conn.cursor()
         cursor.execute("INSERT INTO inspiration_fragments (type, content, source) VALUES (?, ?, ?)",
                        (type, content, source))
         self.conn.commit()
         return cursor.lastrowid
+        
+    def add_inspiration_fragment_from_backup(self, fragment_data):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO inspiration_fragments (id, type, content, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                       (fragment_data['id'], fragment_data['type'], fragment_data['content'], 
+                        fragment_data['source'], fragment_data['created_at']))
+        self.conn.commit()
 
     def get_inspiration_items(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM inspiration_items ORDER BY parent_id, title")
+        return [dict(row) for row in cursor.fetchall()]
+        
+    def get_all_inspiration_items(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM inspiration_items")
         return [dict(row) for row in cursor.fetchall()]
 
     def add_inspiration_item(self, title, content="", tags="", parent_id=None):
@@ -389,14 +424,22 @@ class DataManager:
         self.conn.commit()
         return cursor.lastrowid
         
+    def add_inspiration_item_from_backup(self, item_data):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
+                       (item_data['id'], item_data['title'], item_data['content'], 
+                        item_data['tags'], item_data['parent_id']))
+        self.conn.commit()
+
+        
     def clear_all_writing_data(self):
         cursor = self.conn.cursor()
-        print("正在清空 books, chapters, settings 表...")
         cursor.execute("DELETE FROM chapters")
         cursor.execute("DELETE FROM settings")
         cursor.execute("DELETE FROM books")
+        cursor.execute("DELETE FROM inspiration_items")
+        cursor.execute("DELETE FROM inspiration_fragments")
         self.conn.commit()
-        print("数据表已清空。")
 
     def get_chapters_modified_since(self, check_time):
         check_timestamp_ms = int(check_time.timestamp() * 1000)

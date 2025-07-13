@@ -81,7 +81,7 @@ class BackupDialog(QDialog):
                 self.parent().load_books()
                 self.accept()
             else:
-                QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看控制台输出。")
+                QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看状态栏或控制台输出。")
 
     def delete_backup(self):
         selected_index = self.backup_list.currentRow()
@@ -229,15 +229,16 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
         self.setWindowIcon(QIcon(resource_path('resources/icons/logo.png')))
 
-        # Corrected order of method calls
+        # 连接备份管理器的信号到状态栏
+        self.backup_manager.log_message.connect(self.show_status_message)
+
+        # UI 和其他部分的设置
         self.setup_ui()
         self.setup_actions()
         self.setup_menu_bar()
         self.setup_status_bar()
         self.load_and_apply_font_size()
-
         self.load_books()
-        
         self.setup_snapshot_timer()
         self.setup_stage_point_timer()
         self.run_archive_backup()
@@ -247,6 +248,10 @@ class MainWindow(QMainWindow):
         self.typing_timer.timeout.connect(self.update_typing_speed)
         self.last_char_count = 0
         self.typing_speed = 0
+    
+    def show_status_message(self, message):
+        """在状态栏显示消息，持续5秒"""
+        self.statusBar().showMessage(message, 5000)
 
     def setup_ui(self):
         main_widget = QWidget()
@@ -269,10 +274,6 @@ class MainWindow(QMainWindow):
 
         # Connect signals after UI elements are created
         self.editor.textChanged.connect(self.on_text_changed)
-        # self.editor.undoAvailable.connect(self.undo_action.setEnabled) # This will be connected in setup_actions
-        # self.editor.redoAvailable.connect(self.redo_action.setEnabled) # This will be connected in setup_actions
-
-        # 连接设定面板的信号
         self.settings_panel.settings_changed.connect(self.refresh_editor_highlighter)
 
 
@@ -806,7 +807,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
-        print("正在执行关闭前的阶段点备份...")
+        self.show_status_message("正在执行关闭前的阶段点备份...")
         self.backup_manager.create_stage_point_backup()
 
         self.typing_timer.stop()
@@ -817,15 +818,16 @@ class MainWindow(QMainWindow):
         self.snapshot_timer = QTimer(self)
         self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
         self.snapshot_timer.start(5 * 60 * 1000) # 5分钟
-        print("快照线(Snapshot Line)增量备份已启动，每5分钟检查一次。")
+        self.show_status_message("快照线(Snapshot Line)增量备份已启动，每5分钟检查一次。")
 
     def setup_stage_point_timer(self):
         self.stage_point_timer = QTimer(self)
         self.stage_point_timer.timeout.connect(self.backup_manager.create_stage_point_backup)
         self.stage_point_timer.start(30 * 60 * 1000) # 30分钟
-        print("阶段点(Stage Point)定时备份已启动，每30分钟执行一次。")
+        self.show_status_message("阶段点(Stage Point)定时备份已启动，每30分钟执行一次。")
         
     def run_archive_backup(self):
+        self.show_status_message("正在检查并创建日终归档备份...")
         self.backup_manager.create_archive_backup()
             
     def open_backup_manager(self):
