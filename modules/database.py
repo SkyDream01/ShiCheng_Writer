@@ -96,6 +96,14 @@ def initialize_database():
     )
     """)
     
+    # 新增：偏好设置表
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS preferences (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
+
     # --- 2. 执行数据库迁移 (在表存在后) ---
     # 现在表肯定存在了，可以安全地检查和添加列
 
@@ -128,6 +136,20 @@ class DataManager:
     """数据管理类，封装所有数据库操作"""
     def __init__(self):
         self.conn = get_db_connection()
+
+    # --- 新增：偏好设置方法 ---
+    def get_preference(self, key, default=None):
+        """获取一个偏好设置项"""
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT value FROM preferences WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        return row['value'] if row else default
+
+    def set_preference(self, key, value):
+        """设置一个偏好设置项"""
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
+        self.conn.commit()
 
     def get_books_and_groups(self):
         """获取所有书籍，按分组归类"""

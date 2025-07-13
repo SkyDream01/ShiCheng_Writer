@@ -58,6 +58,15 @@ class Editor(QTextEdit):
         # 设置Tab键的宽度为4个空格
         self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
 
+    def set_font_size(self, size):
+        """设置编辑器字体大小"""
+        font = self.font()
+        font.setPointSize(size)
+        self.setFont(font)
+        # 更新Tab键宽度以适应新字体
+        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
+
+
     def auto_indent_document(self):
         """为全文非空行且尚未缩进的行添加首行缩进。"""
         self.setUpdatesEnabled(False)
