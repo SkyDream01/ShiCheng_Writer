@@ -1,6 +1,19 @@
 # ShiCheng_Writer/modules/theme_manager.py
 import os
+import sys  # [新增] 导入 sys
 from PySide6.QtWidgets import QApplication
+
+# vvvvvvvvvvvvvv [新增] 资源路径辅助函数 vvvvvvvvvvvvvv
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
+    try:
+        # PyInstaller 创建一个临时文件夹，并把路径存储在 _MEIPASS 中
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 def set_stylesheet(theme):
     """加载并应用QSS样式表"""
@@ -8,8 +21,10 @@ def set_stylesheet(theme):
     if not app:
         return
 
-    light_style_file = os.path.join("resources", "styles", "style.qss")
-    dark_style_file = os.path.join("resources", "styles", "dark_style.qss")
+    # vvvvvvvvvvvvvv [修改] 使用 resource_path 函数来定位文件 vvvvvvvvvvvvvv
+    light_style_file = resource_path(os.path.join("resources", "styles", "style.qss"))
+    dark_style_file = resource_path(os.path.join("resources", "styles", "dark_style.qss"))
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     style_file_to_load = light_style_file
     if theme == 'dark' and os.path.exists(dark_style_file):

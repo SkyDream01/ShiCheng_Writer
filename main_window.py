@@ -17,6 +17,17 @@ from widgets.editor import Editor
 from modules.settings_system import SettingsPanel
 from modules.inspiration import InspirationPanel
 
+# vvvvvvvvvvvvvv [新增] 资源路径辅助函数 vvvvvvvvvvvvvv
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
+    try:
+        # PyInstaller 创建一个临时文件夹，并把路径存储在 _MEIPASS 中
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
@@ -218,6 +229,9 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("诗成写作 PC版")
         self.setGeometry(100, 100, 1400, 900)
+        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载窗口图标 vvvvvvvvvvvvvv
+        self.setWindowIcon(QIcon(resource_path('resources/icons/logo.png')))
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         self.setup_actions()
         self.setup_ui() 
@@ -287,9 +301,11 @@ class MainWindow(QMainWindow):
         book_layout.setSpacing(0)
 
         book_toolbar = QToolBar()
-        add_book_action = QAction(QIcon("resources/icons/add.png"), "新建书籍", self)
+        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载工具栏图标 vvvvvvvvvvvvvv
+        add_book_action = QAction(QIcon(resource_path("resources/icons/add.png")), "新建书籍", self)
         add_book_action.triggered.connect(self.add_new_book)
-        import_book_action = QAction(QIcon("resources/icons/import.png"), "导入书籍", self)
+        import_book_action = QAction(QIcon(resource_path("resources/icons/import.png")), "导入书籍", self)
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         import_book_action.triggered.connect(self.import_book)
         book_toolbar.addAction(add_book_action)
         book_toolbar.addAction(import_book_action)
@@ -312,7 +328,9 @@ class MainWindow(QMainWindow):
         chapter_layout.setSpacing(0)
         
         chapter_toolbar = QToolBar()
-        self.add_chapter_toolbar_action = QAction(QIcon("resources/icons/add_chapter.png"), "新建章节", self)
+        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载工具栏图标 vvvvvvvvvvvvvv
+        self.add_chapter_toolbar_action = QAction(QIcon(resource_path("resources/icons/add_chapter.png")), "新建章节", self)
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.add_chapter_toolbar_action.triggered.connect(self.add_new_chapter)
         self.add_chapter_toolbar_action.setEnabled(False) 
         chapter_toolbar.addAction(self.add_chapter_toolbar_action)

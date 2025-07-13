@@ -9,6 +9,18 @@ from modules.database import initialize_database, DataManager
 from modules.backup import BackupManager
 from modules.theme_manager import set_stylesheet
 
+# vvvvvvvvvvvvvv [新增] 资源路径辅助函数 vvvvvvvvvvvvvv
+def resource_path(relative_path):
+    """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
+    try:
+        # PyInstaller 创建一个临时文件夹，并把路径存储在 _MEIPASS 中
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 def main():
     # 将 MainWindow 的导入移至函数内部，确保所有依赖都已加载
     from main_window import MainWindow
@@ -33,6 +45,7 @@ def main():
         # 检测系统主题并加载初始样式
         initial_theme = 'dark' if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else 'light'
     
+    # 使用修改后的 set_stylesheet
     set_stylesheet(initial_theme)
 
 
