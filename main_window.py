@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon
 from PySide6.QtCore import Qt, QSize, QTimer
 
-# 从新的模块导入，打破循环依赖
 from modules.theme_manager import set_stylesheet
 from modules.database import DataManager
 from widgets.editor import Editor
@@ -20,15 +19,16 @@ from modules.inspiration import InspirationPanel
 
 
 class BackupDialog(QDialog):
-    # ... (此部分代码未更改，保持原样)
     def __init__(self, backup_manager, parent=None):
         super().__init__(parent)
         self.backup_manager = backup_manager
+        self.backups_data = []
         self.setWindowTitle("备份管理")
-        self.setMinimumSize(400, 300)
+        self.setMinimumSize(450, 350)
+        
         layout = QVBoxLayout(self)
         self.backup_list = QListWidget()
-        self.load_backups()
+        
         button_layout = QHBoxLayout()
         restore_button = QPushButton("恢复选中项")
         restore_button.clicked.connect(self.restore_backup)
@@ -36,52 +36,64 @@ class BackupDialog(QDialog):
         delete_button.clicked.connect(self.delete_backup)
         button_layout.addWidget(restore_button)
         button_layout.addWidget(delete_button)
-        layout.addWidget(QLabel("所有可用的本地备份 (按时间倒序):"))
+        
+        layout.addWidget(QLabel("所有可恢复的完整备份 (按时间倒序):"))
         layout.addWidget(self.backup_list)
         layout.addLayout(button_layout)
+        
+        self.load_backups()
+
     def load_backups(self):
         self.backup_list.clear()
-        backups = self.backup_manager.list_backups()
-        if not backups:
-            self.backup_list.addItem("暂无备份文件")
+        self.backups_data = self.backup_manager.list_backups()
+        if not self.backups_data:
+            self.backup_list.addItem("暂无完整备份文件")
         else:
-            self.backup_list.addItems(backups)
+            for backup in self.backups_data:
+                item_text = f"[{backup['type']}] {backup['file']}"
+                self.backup_list.addItem(item_text)
+
     def restore_backup(self):
-        selected_item = self.backup_list.currentItem()
-        if not selected_item or selected_item.text() == "暂无备份文件":
+        selected_index = self.backup_list.currentRow()
+        if selected_index < 0 or not self.backups_data:
             QMessageBox.warning(self, "提示", "请先选择一个备份文件。")
             return
-        backup_file = selected_item.text()
+            
+        backup_info = self.backups_data[selected_index]
+        
         reply = QMessageBox.warning(self, "确认恢复",
-                                     f"您确定要从备份 '{backup_file}' 恢复吗？\n"
+                                     f"您确定要从 {backup_info['type']} 备份\n'{backup_info['file']}'\n恢复吗？\n"
                                      "【警告】此操作将完全覆盖当前所有数据！\n"
                                      "恢复后必须重启应用才能看到更改。\n"
                                      "操作无法撤销，请谨慎操作！",
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
-            if self.backup_manager.restore_from_backup(backup_file):
+            if self.backup_manager.restore_from_backup(backup_info):
                 QMessageBox.information(self, "成功", "数据已从备份恢复。\n请立即重启应用程序以应用更改。")
                 self.accept()
             else:
                 QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看控制台输出。")
+
     def delete_backup(self):
-        selected_item = self.backup_list.currentItem()
-        if not selected_item or selected_item.text() == "暂无备份文件":
+        selected_index = self.backup_list.currentRow()
+        if selected_index < 0 or not self.backups_data:
             QMessageBox.warning(self, "提示", "请先选择一个要删除的备份文件。")
             return
-        backup_file = selected_item.text()
+
+        backup_info = self.backups_data[selected_index]
         reply = QMessageBox.question(self, "确认删除",
-                                       f"确定要永久删除备份 '{backup_file}' 吗？",
+                                       f"确定要永久删除此 {backup_info['type']} 备份吗？\n'{backup_info['file']}'",
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
         if reply == QMessageBox.Yes:
-            if self.backup_manager.delete_backup(backup_file):
-                QMessageBox.information(self, "成功", f"备份 '{backup_file}' 已被删除。")
+            if self.backup_manager.delete_backup(backup_info):
+                QMessageBox.information(self, "成功", f"备份 '{backup_info['file']}' 已被删除。")
                 self.load_backups()
             else:
                 QMessageBox.critical(self, "失败", "删除过程中发生错误。")
 
+
 class ManageGroupsDialog(QDialog):
-    # ... (此部分代码未更改，保持原样)
     def __init__(self, data_manager, parent=None):
         super().__init__(parent)
         self.data_manager = data_manager
@@ -163,7 +175,6 @@ class ManageGroupsDialog(QDialog):
 
 
 class EditBookDialog(QDialog):
-    # ... (此部分代码未更改，保持原样)
     def __init__(self, book_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑书籍信息")
@@ -196,7 +207,6 @@ class EditBookDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    # ... (此部分代码未更改，保持原样)
     def __init__(self, data_manager, backup_manager, initial_theme):
         super().__init__()
         self.data_manager = data_manager
@@ -210,12 +220,15 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
 
         self.setup_actions()
-        self.setup_ui() # setup_ui会调用create_center_panel创建label
-        self.setup_status_bar() # 【新增】单独设置状态栏
+        self.setup_ui() 
+        self.setup_status_bar()
         self.load_and_apply_font_size()
 
         self.load_books()
-        self.setup_auto_backup()
+        
+        self.setup_snapshot_timer()
+        self.setup_stage_point_timer()
+        self.run_archive_backup()
 
         self.typing_timer = QTimer(self)
         self.typing_timer.timeout.connect(self.update_typing_speed)
@@ -223,7 +236,6 @@ class MainWindow(QMainWindow):
         self.typing_speed = 0
 
     def setup_ui(self):
-        # 【修改】移除状态栏的设置，将其独立
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
         main_layout.setContentsMargins(0,0,0,0)
@@ -249,24 +261,26 @@ class MainWindow(QMainWindow):
         self.editor.redoAvailable.connect(self.redo_action.setEnabled)
 
     def setup_status_bar(self):
-        """【新增】将状态栏设置逻辑独立出来"""
-        status_bar = self.statusBar() # 获取主窗口的唯一状态栏
+        status_bar = self.statusBar()
         status_bar.showMessage("欢迎使用诗成写作！")
         
-        # 将永久控件添加到主状态栏的右侧
+        self.word_count_label = QLabel("字数: 0")
+        self.typing_speed_label = QLabel("速度: 0 字/分")
+        self.font_size_combobox = QComboBox()
+        self.font_size_combobox.addItems(["小 (10)", "中 (12)", "大 (16)"])
+        self.font_size_combobox.currentIndexChanged.connect(self.on_font_size_changed)
+
         status_bar.addPermanentWidget(self.word_count_label)
         status_bar.addPermanentWidget(self.typing_speed_label)
         status_bar.addPermanentWidget(self.font_size_combobox)
 
 
     def create_left_panel(self):
-        """【已优化】创建左侧面板，使用QToolBar替代按钮"""
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        # --- 书籍列表 ---
         book_widget = QWidget()
         book_layout = QVBoxLayout(book_widget)
         book_layout.setContentsMargins(0, 0, 0, 0)
@@ -292,7 +306,6 @@ class MainWindow(QMainWindow):
         book_layout.addWidget(self.book_tree)
         book_widget.setLayout(book_layout)
 
-        # --- 章节列表 ---
         chapter_widget = QWidget()
         chapter_layout = QVBoxLayout(chapter_widget)
         chapter_layout.setContentsMargins(0, 0, 0, 0)
@@ -326,7 +339,6 @@ class MainWindow(QMainWindow):
 
 
     def create_center_panel(self):
-        """【修改】不再创建和返回独立状态栏，只创建控件"""
         editor_container = QWidget()
         editor_layout = QVBoxLayout(editor_container)
         editor_layout.setContentsMargins(0, 0, 0, 0)
@@ -334,20 +346,11 @@ class MainWindow(QMainWindow):
 
         self.editor = Editor()
         
-        # 只创建控件，不把它们添加到任何状态栏里
-        self.word_count_label = QLabel("字数: 0")
-        self.typing_speed_label = QLabel("速度: 0 字/分")
-        self.font_size_combobox = QComboBox()
-        self.font_size_combobox.addItems(["小 (10)", "中 (12)", "大 (16)"])
-        self.font_size_combobox.currentIndexChanged.connect(self.on_font_size_changed)
-
         editor_layout.addWidget(self.editor)
-        # 不再添加 editor_status_bar
         
         return editor_container
 
     def create_right_panel(self):
-        # ... (此部分代码未更改，保持原样)
         self.right_tabs = QTabWidget()
         self.settings_panel = SettingsPanel(self.data_manager)
         self.inspiration_panel = InspirationPanel(self.data_manager)
@@ -357,7 +360,6 @@ class MainWindow(QMainWindow):
 
 
     def setup_actions(self):
-        # ... (此部分代码未更改，保持原样)
         self.add_book_action = QAction("新建书籍", self)
         self.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
         self.add_book_action.triggered.connect(self.add_new_book)
@@ -398,7 +400,6 @@ class MainWindow(QMainWindow):
 
 
     def setup_menu_bar(self):
-        # ... (此部分代码未更改，保持原样)
         menu_bar = self.menuBar()
 
         file_menu = menu_bar.addMenu("文件")
@@ -410,8 +411,8 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.export_action)
         file_menu.addSeparator()
 
-        backup_now_action = QAction("立即备份", self)
-        backup_now_action.triggered.connect(lambda: self.run_scheduled_backup(force=True))
+        backup_now_action = QAction("立即创建阶段点备份", self)
+        backup_now_action.triggered.connect(self.backup_manager.create_stage_point_backup)
         file_menu.addAction(backup_now_action)
 
         backup_manage_action = QAction("备份管理", self)
@@ -440,19 +441,16 @@ class MainWindow(QMainWindow):
 
 
     def update_theme(self, new_theme):
-        # ... (此部分代码未更改，保持原样)
         self.data_manager.set_preference('theme', new_theme)
         self.current_theme = new_theme
         self.editor.highlighter.update_highlight_color()
 
     def toggle_theme(self):
-        # ... (此部分代码未更改，保持原样)
         new_theme = 'dark' if self.current_theme == 'light' else 'light'
         set_stylesheet(new_theme)
         self.update_theme(new_theme)
         
     def load_and_apply_font_size(self):
-        # ... (此部分代码未更改，保持原样)
         font_size_str = self.data_manager.get_preference('font_size', '12')
         try:
             font_size = int(font_size_str)
@@ -476,7 +474,6 @@ class MainWindow(QMainWindow):
 
 
     def on_font_size_changed(self, index):
-        # ... (此部分代码未更改，保持原样)
         font_sizes = {0: 10, 1: 12, 2: 16}
         size = font_sizes.get(index, 12)
 
@@ -488,7 +485,6 @@ class MainWindow(QMainWindow):
 
 
     def auto_indent_document(self):
-        # ... (此部分代码未更改，保持原样)
         if not self.current_chapter_id:
             QMessageBox.warning(self, "提示", "请先打开一个章节。")
             return
@@ -497,7 +493,6 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "成功", "全文缩进操作已完成。")
 
     def auto_unindent_document(self):
-        # ... (此部分代码未更改，保持原样)
         if not self.current_chapter_id:
             QMessageBox.warning(self, "提示", "请先打开一个章节。")
             return
@@ -506,13 +501,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "成功", "取消全文缩进操作已完成。")
 
     def open_group_manager(self):
-        # ... (此部分代码未更改，保持原样)
         dialog = ManageGroupsDialog(self.data_manager, self)
         dialog.exec()
-
-    # --- 以下方法保持不变 ---
-    def setup_docks(self):
-        pass
 
     def load_books(self):
         self.book_model.clear()
@@ -551,7 +541,6 @@ class MainWindow(QMainWindow):
             self.typing_speed_label.setText("速度: 0 字/分")
 
     def open_book_menu(self, position):
-        # ... (此部分代码未更改，保持原样)
         index = self.book_tree.indexAt(position)
         if not index.isValid(): return
         item = self.book_model.itemFromIndex(index)
@@ -569,7 +558,6 @@ class MainWindow(QMainWindow):
         elif action == export_action: self.export_book(book_id)
 
     def open_chapter_menu(self, position):
-        # ... (此部分代码未更改，保持原样)
         index = self.chapter_tree.indexAt(position)
         if not index.isValid(): return
         item = self.chapter_model.itemFromIndex(index)
@@ -586,7 +574,6 @@ class MainWindow(QMainWindow):
             if action == rename_volume_action: self.rename_volume(item.text())
 
     def add_new_book(self):
-        # ... (此部分代码未更改，保持原样)
         title, ok = QInputDialog.getText(self, "新建书籍", "请输入书名:")
         if ok and title:
             self.data_manager.add_book(title, group="未分组")
@@ -594,7 +581,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"书籍《{title}》已创建！", 3000)
 
     def edit_book(self, book_id):
-        # ... (此部分代码未更改，保持原样)
         book_details = self.data_manager.get_book_details(book_id)
         if not book_details:
             QMessageBox.warning(self, "错误", "找不到书籍信息。")
@@ -607,7 +593,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"书籍《{new_details['title']}》信息已更新。", 3000)
 
     def delete_book(self, book_id):
-        # ... (此部分代码未更改，保持原样)
         reply = QMessageBox.question(self, '确认删除', "确定要删除这本书吗？\n该操作会将其移入回收站。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             book_details = self.data_manager.get_book_details(book_id)
@@ -625,7 +610,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"书籍《{book_details['title']}》已移入回收站。", 3000)
             
     def set_book_group(self, book_id):
-        # ... (此部分代码未更改，保持原样)
         book_details = self.data_manager.get_book_details(book_id)
         if not book_details: return
         group, ok = QInputDialog.getText(self, "设置分组", "请输入分组名称:", text=book_details.get('group', ''))
@@ -634,13 +618,11 @@ class MainWindow(QMainWindow):
             self.load_books()
 
     def import_book(self):
-        # ... (此部分代码未更改，保持原样)
         file_path, _ = QFileDialog.getOpenFileName(self, "导入书籍", "", "文本文件 (*.txt);;Word文档 (*.docx)")
         if file_path:
             QMessageBox.information(self, "提示", f"从 {os.path.basename(file_path)} 导入书籍的功能待实现。")
             
     def export_book(self, book_id):
-        # ... (此部分代码未更改，保持原样)
         if not book_id:
             QMessageBox.warning(self, "提示", "请先选择一本书籍进行导出。")
             return
@@ -674,7 +656,6 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "导出失败", f"发生错误：\n{e}")
 
     def load_chapters_for_book(self, book_id):
-        # ... (此部分代码未更改，保持原样)
         self.chapter_model.clear()
         chapters = self.data_manager.get_chapters_for_book(book_id)
         volumes = {}
@@ -692,7 +673,6 @@ class MainWindow(QMainWindow):
         self.chapter_tree.expandAll()
 
     def on_chapter_selected(self, index):
-        # ... (此部分代码未更改，保持原样)
         item = self.chapter_model.itemFromIndex(index)
         if not item: return
         data = item.data(Qt.UserRole)
@@ -716,7 +696,6 @@ class MainWindow(QMainWindow):
             if not self.typing_timer.isActive(): self.typing_timer.start(5000)
 
     def add_new_chapter(self):
-        # ... (此部分代码未更改，保持原样)
         if self.current_book_id is None:
             QMessageBox.warning(self, "提示", "请先选择一本书籍！")
             return
@@ -732,7 +711,6 @@ class MainWindow(QMainWindow):
             self.find_and_select_chapter(new_chapter_id)
 
     def rename_chapter(self, chapter_id):
-        # ... (此部分代码未更改，保持原样)
         chapter_details = self.data_manager.get_chapter_details(chapter_id)
         if not chapter_details: return
         new_title, ok = QInputDialog.getText(self, "重命名章节", "请输入新的章节名:", text=chapter_details['title'])
@@ -742,7 +720,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"章节已重命名为《{new_title}》", 3000)
 
     def rename_volume(self, old_volume_name):
-        # ... (此部分代码未更改，保持原样)
         new_volume_name, ok = QInputDialog.getText(self, "重命名卷", "请输入新的卷名:", text=old_volume_name)
         if ok and new_volume_name and new_volume_name != old_volume_name:
             self.data_manager.update_volume_name(self.current_book_id, old_volume_name, new_volume_name)
@@ -750,7 +727,6 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"卷《{old_volume_name}》已重命名为《{new_volume_name}》", 3000)
 
     def find_and_select_chapter(self, chapter_id, force_select=False):
-        # ... (此部分代码未更改，保持原样)
         if chapter_id is None: return
         for row in range(self.chapter_model.rowCount()):
             parent_item = self.chapter_model.item(row)
@@ -764,7 +740,6 @@ class MainWindow(QMainWindow):
                     return
                     
     def save_current_chapter(self):
-        # ... (此部分代码未更改，保持原样)
         if self.current_chapter_id and self.is_text_changed:
             content = self.editor.toPlainText()
             self.data_manager.update_chapter_content(self.current_chapter_id, content)
@@ -779,13 +754,11 @@ class MainWindow(QMainWindow):
         return False
         
     def update_editor_highlighter(self):
-        # ... (此部分代码未更改，保持原样)
         if self.current_book_id:
             settings_names = self.data_manager.get_all_settings_names(self.current_book_id)
             self.editor.update_highlighter(settings_names)
             
     def on_text_changed(self):
-        # ... (此部分代码未更改，保持原样)
         if not self.editor.signalsBlocked():
             self.is_text_changed = True
             content = self.editor.toPlainText()
@@ -793,7 +766,6 @@ class MainWindow(QMainWindow):
             self.word_count_label.setText(f"字数: {count}*")
 
     def update_typing_speed(self):
-        # ... (此部分代码未更改，保持原样)
         if not self.current_chapter_id:
             self.typing_speed = 0
             self.typing_timer.stop()
@@ -805,41 +777,36 @@ class MainWindow(QMainWindow):
         self.last_char_count = current_char_count
 
     def closeEvent(self, event):
-        # ... (此部分代码未更改，保持原样)
         if self.is_text_changed:
             reply = QMessageBox.question(self, "退出提示", "当前章节有未保存的修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
             if reply == QMessageBox.Save: self.save_current_chapter()
             elif reply == QMessageBox.Cancel:
                 event.ignore()
                 return
+
+        print("正在执行关闭前的阶段点备份...")
+        self.backup_manager.create_stage_point_backup()
+
         self.typing_timer.stop()
         self.data_manager.close()
         event.accept()
 
-    def setup_auto_backup(self):
-        # ... (此部分代码未更改，保持原样)
-        self.backup_timer = QTimer(self)
-        self.backup_timer.timeout.connect(self.run_scheduled_backup)
-        self.backup_timer.start(1800 * 1000)
-        self.run_scheduled_backup()
-        print("自动备份任务已启动，每30分钟检查一次。")
+    def setup_snapshot_timer(self):
+        self.snapshot_timer = QTimer(self)
+        self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
+        self.snapshot_timer.start(60 * 1000) # 60秒
+        print("快照线(Snapshot Line)增量备份已启动，每60秒检查一次。")
+
+    def setup_stage_point_timer(self):
+        self.stage_point_timer = QTimer(self)
+        self.stage_point_timer.timeout.connect(self.backup_manager.create_stage_point_backup)
+        self.stage_point_timer.start(30 * 60 * 1000) # 30分钟
+        print("阶段点(Stage Point)定时备份已启动，每30分钟执行一次。")
         
-    def run_scheduled_backup(self, force=False):
-        # ... (此部分代码未更改，保持原样)
-        if force:
-            self.statusBar().showMessage("正在执行手动备份...", 3000)
-            if self.backup_manager.create_backup(force=True):
-                self.statusBar().showMessage("手动备份成功！", 3000)
-            else:
-                 self.statusBar().showMessage("手动备份失败，请查看日志。", 3000)
-        else:
-            print("正在执行例行备份...")
-            self.statusBar().showMessage("正在执行自动备份...", 2000)
-            self.backup_manager.create_backup()
-            self.statusBar().showMessage("自动备份完成。", 2000)
+    def run_archive_backup(self):
+        self.backup_manager.create_archive_backup()
             
     def open_backup_manager(self):
-        # ... (此部分代码未更改，保持原样)
         if self.is_text_changed: self.save_current_chapter()
         dialog = BackupDialog(self.backup_manager, self)
         dialog.exec()
