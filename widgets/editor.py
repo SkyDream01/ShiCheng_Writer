@@ -18,11 +18,11 @@ class SettingsHighlighter(QSyntaxHighlighter):
         # 暗色主题的基色会比窗口文字颜色更亮
         if QApplication.instance().palette().base().color().lightness() < QApplication.instance().palette().windowText().color().lightness():
             # 暗色主题
-            self.highlight_format.setBackground(QColor("#005f87")) # 深蓝色背景
+            self.highlight_format.setBackground(QColor("#015a9e")) # Darker shade for dark theme
             self.highlight_format.setForeground(QColor("#e0e0e0")) # 亮灰色文字
         else:
             # 亮色主题
-            self.highlight_format.setBackground(QColor("#d4edff")) # 淡蓝色背景
+            self.highlight_format.setBackground(QColor("#d9e9f7")) # Lighter shade for light theme
             self.highlight_format.setForeground(QColor("#000000")) # 黑色文字
 
         self.highlight_format.setFontWeight(QFont.Bold)

@@ -25,20 +25,29 @@ def main():
     # 4. 启动Qt应用
     app = QApplication(sys.argv)
 
-    # 检测系统主题并加载初始样式
-    initial_theme = 'dark' if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else 'light'
+    # 优先从数据库加载主题，若无则匹配系统
+    saved_theme = data_manager.get_preference('theme')
+    if saved_theme in ['light', 'dark']:
+        initial_theme = saved_theme
+    else:
+        # 检测系统主题并加载初始样式
+        initial_theme = 'dark' if app.styleHints().colorScheme() == Qt.ColorScheme.Dark else 'light'
+    
     set_stylesheet(initial_theme)
+
 
     # 将 backup_manager 和初始主题传递给主窗口
     window = MainWindow(data_manager, backup_manager, initial_theme)
 
     # 监听系统颜色方案的变化 (自动切换)
     def on_color_scheme_changed(scheme):
-        new_theme = 'dark' if scheme == Qt.ColorScheme.Dark else 'light'
-        print(f"系统主题已更改为: {new_theme.capitalize()}")
-        set_stylesheet(new_theme)
-        # 通知窗口更新其状态和组件
-        window.update_theme(new_theme)
+        # 仅当用户未明确设置主题时才自动切换
+        if data_manager.get_preference('theme') is None:
+            new_theme = 'dark' if scheme == Qt.ColorScheme.Dark else 'light'
+            print(f"系统主题已更改为: {new_theme.capitalize()}")
+            set_stylesheet(new_theme)
+            # 通知窗口更新其状态和组件
+            window.update_theme(new_theme)
 
     app.styleHints().colorSchemeChanged.connect(on_color_scheme_changed)
 

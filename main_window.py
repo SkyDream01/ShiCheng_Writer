@@ -7,8 +7,8 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QTreeView, QMessageBox, QInputDialog, QFileDialog,
                                QToolBar, QLabel, QMenu, QPushButton, QStatusBar, QToolButton,
                                QDialog, QDialogButtonBox, QApplication, QFormLayout, QLineEdit,
-                               QTextEdit, QMenuBar, QTabWidget, QFrame, QSpinBox) # 新增 QSpinBox
-from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence
+                               QTextEdit, QMenuBar, QTabWidget, QFrame, QComboBox) # QSpinBox replaced with QComboBox
+from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon # Import QFont and QIcon
 from PySide6.QtCore import Qt, QSize, QTimer
 
 # 从新的模块导入，打破循环依赖
@@ -262,8 +262,11 @@ class MainWindow(QMainWindow):
 
         # 连接信号
         self.editor.textChanged.connect(self.on_text_changed)
+        # Assuming editor.undo/redoAvailable signals exist and connect them
+        # These were commented out, re-enabling if the Editor class supports them
         self.editor.undoAvailable.connect(self.undo_action.setEnabled)
         self.editor.redoAvailable.connect(self.redo_action.setEnabled)
+
 
         # 应用主状态栏
         self.setStatusBar(QStatusBar(self))
@@ -354,14 +357,15 @@ class MainWindow(QMainWindow):
         self.typing_speed_label = QLabel("速度: 0 字/分")
         
         # 新增：字号选择控件
-        self.font_size_spinbox = QSpinBox()
-        self.font_size_spinbox.setPrefix("字号: ")
-        self.font_size_spinbox.setRange(9, 72)
-        self.font_size_spinbox.valueChanged.connect(self.on_font_size_changed)
+        self.font_size_combobox = QComboBox()
+        self.font_size_combobox.addItem("小 (10)")
+        self.font_size_combobox.addItem("中 (12)")
+        self.font_size_combobox.addItem("大 (16)")
+        self.font_size_combobox.currentIndexChanged.connect(self.on_font_size_changed)
 
         self.editor_status_bar.addPermanentWidget(self.word_count_label)
         self.editor_status_bar.addPermanentWidget(self.typing_speed_label)
-        self.editor_status_bar.addPermanentWidget(self.font_size_spinbox)
+        self.editor_status_bar.addPermanentWidget(self.font_size_combobox)
 
 
         editor_layout.addWidget(self.editor)
@@ -470,7 +474,7 @@ class MainWindow(QMainWindow):
 
 
     def update_theme(self, new_theme):
-        # ... (此部分代码未更改)
+        self.data_manager.set_preference('theme', new_theme)
         self.current_theme = new_theme
         self.editor.highlighter.update_highlight_color()
 
@@ -483,23 +487,45 @@ class MainWindow(QMainWindow):
         
     def load_and_apply_font_size(self):
         """从数据库加载字体大小并应用"""
-        font_size_str = self.data_manager.get_preference('font_size', '14')
+        font_size_str = self.data_manager.get_preference('font_size', '12') # Default to '中' (12)
         try:
             font_size = int(font_size_str)
         except (ValueError, TypeError):
-            font_size = 14 # 默认值
+            font_size = 12 # Default to '中' (12)
         
-        # 应用到编辑器
+        # Apply to editor
         self.editor.set_font_size(font_size)
         
-        # 更新SpinBox的值（不触发信号）
-        self.font_size_spinbox.blockSignals(True)
-        self.font_size_spinbox.setValue(font_size)
-        self.font_size_spinbox.blockSignals(False)
+        # Apply to entire application UI
+        app_font = QApplication.instance().font()
+        app_font.setPointSize(font_size)
+        QApplication.instance().setFont(app_font)
 
-    def on_font_size_changed(self, size):
-        """当字号改变时调用"""
+        # Update ComboBox value (block signals to avoid re-triggering)
+        self.font_size_combobox.blockSignals(True)
+        if font_size == 10:
+            self.font_size_combobox.setCurrentIndex(0) # Small
+        elif font_size == 16:
+            self.font_size_combobox.setCurrentIndex(2) # Large
+        else:
+            self.font_size_combobox.setCurrentIndex(1) # Medium (default)
+        self.font_size_combobox.blockSignals(False)
+
+
+    def on_font_size_changed(self, index):
+        """当字号选择改变时调用"""
+        font_sizes = {
+            0: 10, # 小
+            1: 12, # 中
+            2: 16  # 大
+        }
+        size = font_sizes.get(index, 12) # Default to 12 if invalid index
+
         self.editor.set_font_size(size)
+        # Also apply to entire application UI
+        app_font = QApplication.instance().font()
+        app_font.setPointSize(size)
+        QApplication.instance().setFont(app_font)
         self.data_manager.set_preference('font_size', str(size))
 
 
