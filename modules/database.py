@@ -38,7 +38,7 @@ def initialize_database():
         content TEXT,
         word_count INTEGER DEFAULT 0,
         createTime INTEGER,
-        lastEditTime INTEGER, -- 【新增】章节的最后修改时间
+        lastEditTime INTEGER,
         hash TEXT,
         FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
     )
@@ -218,7 +218,7 @@ class DataManager:
 
     def add_chapter(self, book_id, volume, title):
         current_time = int(datetime.now().timestamp() * 1000)
-        content = f"# {title}\n\n"
+        content = f"# {title}\n\n　　"
         word_count = len(content.strip())
         content_hash = hash(content)
         cursor = self.conn.cursor()
@@ -294,16 +294,59 @@ class DataManager:
         else:
              cursor.execute("SELECT * FROM settings WHERE book_id IS NULL")
         return [dict(row) for row in cursor.fetchall()]
-    
-    def add_setting(self, name, type, description, book_id=None, content=""):
+
+    def get_setting_details(self, setting_id):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM settings WHERE id = ?", (setting_id,))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        setting_data = dict(row)
+        if setting_data['content']:
+            try:
+                setting_data['content'] = json.loads(setting_data['content'])
+            except (json.JSONDecodeError, TypeError):
+                setting_data['content'] = {'value': setting_data['content']} # 兼容旧纯文本数据
+        else:
+            setting_data['content'] = {}
+            
+        return setting_data
+
+    def add_setting(self, name, type, description, book_id=None, content=None):
         try:
+            content_json = json.dumps(content if content is not None else {})
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO settings (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
-                           (name, type, description, book_id, content))
+                           (name, type, description, book_id, content_json))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
             return None
+
+    def update_setting(self, setting_id, name, type, description, content=None):
+        try:
+            content_json = json.dumps(content if content is not None else {})
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                UPDATE settings SET name = ?, type = ?, description = ?, content = ?
+                WHERE id = ?
+            """, (name, type, description, content_json, setting_id))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"数据库更新设定失败: {e}")
+            return False
+
+    def delete_setting(self, setting_id):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM settings WHERE id = ?", (setting_id,))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"删除设定失败: {e}")
+            return False
 
     def get_all_groups(self):
         cursor = self.conn.cursor()
@@ -359,9 +402,10 @@ class DataManager:
         check_timestamp_ms = int(check_time.timestamp() * 1000)
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT id, book_id, title, content, lastEditTime 
-            FROM chapters 
-            WHERE lastEditTime > ?
+            SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime, b.title as book_title
+            FROM chapters c
+            JOIN books b ON c.book_id = b.id
+            WHERE c.lastEditTime > ?
         """, (check_timestamp_ms,))
         return [dict(row) for row in cursor.fetchall()]
 

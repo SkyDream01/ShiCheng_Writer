@@ -17,17 +17,14 @@ from widgets.editor import Editor
 from modules.settings_system import SettingsPanel
 from modules.inspiration import InspirationPanel
 
-# vvvvvvvvvvvvvv [新增] 资源路径辅助函数 vvvvvvvvvvvvvv
 def resource_path(relative_path):
     """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
     try:
-        # PyInstaller 创建一个临时文件夹，并把路径存储在 _MEIPASS 中
         base_path = sys._MEIPASS
     except Exception:
         base_path = os.path.abspath(".")
 
     return os.path.join(base_path, relative_path)
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
@@ -81,6 +78,7 @@ class BackupDialog(QDialog):
         if reply == QMessageBox.Yes:
             if self.backup_manager.restore_from_backup(backup_info):
                 QMessageBox.information(self, "成功", "数据已从备份恢复。\n请立即重启应用程序以应用更改。")
+                self.parent().load_books()
                 self.accept()
             else:
                 QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看控制台输出。")
@@ -229,12 +227,12 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("诗成写作 PC版")
         self.setGeometry(100, 100, 1400, 900)
-        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载窗口图标 vvvvvvvvvvvvvv
         self.setWindowIcon(QIcon(resource_path('resources/icons/logo.png')))
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+        # Corrected order of method calls
+        self.setup_ui()
         self.setup_actions()
-        self.setup_ui() 
+        self.setup_menu_bar()
         self.setup_status_bar()
         self.load_and_apply_font_size()
 
@@ -245,6 +243,7 @@ class MainWindow(QMainWindow):
         self.run_archive_backup()
 
         self.typing_timer = QTimer(self)
+        self.typing_timer.setInterval(5000) # 5秒计算一次
         self.typing_timer.timeout.connect(self.update_typing_speed)
         self.last_char_count = 0
         self.typing_speed = 0
@@ -268,11 +267,14 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.splitter)
         self.setCentralWidget(main_widget)
 
-        self.setup_menu_bar()
-
+        # Connect signals after UI elements are created
         self.editor.textChanged.connect(self.on_text_changed)
-        self.editor.undoAvailable.connect(self.undo_action.setEnabled)
-        self.editor.redoAvailable.connect(self.redo_action.setEnabled)
+        # self.editor.undoAvailable.connect(self.undo_action.setEnabled) # This will be connected in setup_actions
+        # self.editor.redoAvailable.connect(self.redo_action.setEnabled) # This will be connected in setup_actions
+
+        # 连接设定面板的信号
+        self.settings_panel.settings_changed.connect(self.refresh_editor_highlighter)
+
 
     def setup_status_bar(self):
         status_bar = self.statusBar()
@@ -281,7 +283,7 @@ class MainWindow(QMainWindow):
         self.word_count_label = QLabel("字数: 0")
         self.typing_speed_label = QLabel("速度: 0 字/分")
         self.font_size_combobox = QComboBox()
-        self.font_size_combobox.addItems(["小 (10)", "中 (12)", "大 (16)"])
+        self.font_size_combobox.addItems(["14px", "16px", "18px", "20px"])
         self.font_size_combobox.currentIndexChanged.connect(self.on_font_size_changed)
 
         status_bar.addPermanentWidget(self.word_count_label)
@@ -301,11 +303,9 @@ class MainWindow(QMainWindow):
         book_layout.setSpacing(0)
 
         book_toolbar = QToolBar()
-        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载工具栏图标 vvvvvvvvvvvvvv
         add_book_action = QAction(QIcon(resource_path("resources/icons/add.png")), "新建书籍", self)
         add_book_action.triggered.connect(self.add_new_book)
         import_book_action = QAction(QIcon(resource_path("resources/icons/import.png")), "导入书籍", self)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         import_book_action.triggered.connect(self.import_book)
         book_toolbar.addAction(add_book_action)
         book_toolbar.addAction(import_book_action)
@@ -328,9 +328,7 @@ class MainWindow(QMainWindow):
         chapter_layout.setSpacing(0)
         
         chapter_toolbar = QToolBar()
-        # vvvvvvvvvvvvvv [修改] 使用 resource_path 加载工具栏图标 vvvvvvvvvvvvvv
         self.add_chapter_toolbar_action = QAction(QIcon(resource_path("resources/icons/add_chapter.png")), "新建章节", self)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.add_chapter_toolbar_action.triggered.connect(self.add_new_chapter)
         self.add_chapter_toolbar_action.setEnabled(False) 
         chapter_toolbar.addAction(self.add_chapter_toolbar_action)
@@ -370,8 +368,8 @@ class MainWindow(QMainWindow):
 
     def create_right_panel(self):
         self.right_tabs = QTabWidget()
-        self.settings_panel = SettingsPanel(self.data_manager)
-        self.inspiration_panel = InspirationPanel(self.data_manager)
+        self.settings_panel = SettingsPanel(self.data_manager, self)
+        self.inspiration_panel = InspirationPanel(self.data_manager, self)
         self.right_tabs.addTab(self.settings_panel, "设定仓库")
         self.right_tabs.addTab(self.inspiration_panel, "灵感中心")
         return self.right_tabs
@@ -397,13 +395,15 @@ class MainWindow(QMainWindow):
         self.export_action.setEnabled(False)
 
         self.undo_action = QAction("撤销", self)
-        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
-        self.undo_action.setEnabled(False)
+        self.undo_action.setShortcut(QKeySequence.Undo)
+        self.undo_action.triggered.connect(self.editor.undo)
+        self.editor.undoAvailable.connect(self.undo_action.setEnabled)
 
         self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Y"))
-        self.redo_action.setEnabled(False)
-
+        self.redo_action.setShortcut(QKeySequence.Redo)
+        self.redo_action.triggered.connect(self.editor.redo)
+        self.editor.redoAvailable.connect(self.redo_action.setEnabled)
+        
         self.indent_action = QAction("全文缩进", self)
         self.indent_action.setShortcut(QKeySequence("Ctrl+I"))
         self.indent_action.triggered.connect(self.auto_indent_document)
@@ -461,7 +461,8 @@ class MainWindow(QMainWindow):
     def update_theme(self, new_theme):
         self.data_manager.set_preference('theme', new_theme)
         self.current_theme = new_theme
-        self.editor.highlighter.update_highlight_color()
+        if hasattr(self.editor, 'highlighter'):
+             self.editor.highlighter.update_highlight_color()
 
     def toggle_theme(self):
         new_theme = 'dark' if self.current_theme == 'light' else 'light'
@@ -469,37 +470,23 @@ class MainWindow(QMainWindow):
         self.update_theme(new_theme)
         
     def load_and_apply_font_size(self):
-        font_size_str = self.data_manager.get_preference('font_size', '12')
-        try:
-            font_size = int(font_size_str)
-        except (ValueError, TypeError):
-            font_size = 12
+        font_size_str = self.data_manager.get_preference('font_size', '16px')
         
-        self.editor.set_font_size(font_size)
+        self.editor.set_font_size(font_size_str)
         
-        app_font = QApplication.instance().font()
-        app_font.setPointSize(font_size)
-        QApplication.instance().setFont(app_font)
-
         self.font_size_combobox.blockSignals(True)
-        if font_size == 10:
-            self.font_size_combobox.setCurrentIndex(0)
-        elif font_size == 16:
-            self.font_size_combobox.setCurrentIndex(2)
+        idx = self.font_size_combobox.findText(font_size_str)
+        if idx != -1:
+            self.font_size_combobox.setCurrentIndex(idx)
         else:
-            self.font_size_combobox.setCurrentIndex(1)
+            self.font_size_combobox.setCurrentIndex(1) # Default to 16px
         self.font_size_combobox.blockSignals(False)
 
 
     def on_font_size_changed(self, index):
-        font_sizes = {0: 10, 1: 12, 2: 16}
-        size = font_sizes.get(index, 12)
-
-        self.editor.set_font_size(size)
-        app_font = QApplication.instance().font()
-        app_font.setPointSize(size)
-        QApplication.instance().setFont(app_font)
-        self.data_manager.set_preference('font_size', str(size))
+        size_str = self.font_size_combobox.itemText(index)
+        self.editor.set_font_size(size_str)
+        self.data_manager.set_preference('font_size', size_str)
 
 
     def auto_indent_document(self):
@@ -540,14 +527,22 @@ class MainWindow(QMainWindow):
     def on_book_selected(self, index):
         item = self.book_model.itemFromIndex(index)
         if not item: return
+        
+        item_type = item.data(Qt.UserRole)
+        if item_type == "group":
+            return 
+            
         book_id = item.data(Qt.UserRole)
+
         if isinstance(book_id, int):
             if self.is_text_changed:
                 self.save_current_chapter()
+
             self.current_book_id = book_id
             self.load_chapters_for_book(book_id)
             self.settings_panel.set_book(book_id)
-            self.update_editor_highlighter()
+            self.inspiration_panel.refresh_all()
+            self.refresh_editor_highlighter()
             self.setWindowTitle(f"诗成写作 - {item.text()}")
             self.add_chapter_action.setEnabled(True)
             self.add_chapter_toolbar_action.setEnabled(True)
@@ -583,11 +578,13 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         if isinstance(data, int):
             rename_chapter_action = menu.addAction("重命名章节")
+            delete_chapter_action = menu.addAction("删除章节")
         else:
             rename_volume_action = menu.addAction("重命名卷")
         action = menu.exec_(self.chapter_tree.viewport().mapToGlobal(position))
         if isinstance(data, int):
             if action == rename_chapter_action: self.rename_chapter(data)
+            # elif action == delete_chapter_action: self.delete_chapter(data) # 待实现
         else:
             if action == rename_volume_action: self.rename_volume(item.text())
 
@@ -663,11 +660,9 @@ class MainWindow(QMainWindow):
                             f.write(f"\n{'#'*2} {current_volume}\n\n")
                         chapter_id = chapter_data['id']
                         content, _ = self.data_manager.get_chapter_content(chapter_id)
-                        clean_content = content.strip()
-                        expected_title = f"# {chapter_data['title']}"
-                        if not clean_content.startswith(expected_title):
-                             f.write(f"### {chapter_data['title']}\n\n")
-                        f.write(clean_content)
+                        # clean_content = content.strip()
+                        f.write(f"### {chapter_data['title']}\n\n")
+                        f.write(content)
                         f.write("\n\n" + "-"*15 + "\n\n")
                 QMessageBox.information(self, "成功", f"书籍已成功导出到 {os.path.basename(file_path)}")
             except Exception as e:
@@ -711,7 +706,7 @@ class MainWindow(QMainWindow):
             self.typing_speed_label.setText("速度: 0 字/分")
             self.statusBar().showMessage(f"已打开章节: {item.text()}", 3000)
             self.last_char_count = count
-            if not self.typing_timer.isActive(): self.typing_timer.start(5000)
+            if not self.typing_timer.isActive(): self.typing_timer.start()
 
     def add_new_chapter(self):
         if self.current_book_id is None:
@@ -727,6 +722,9 @@ class MainWindow(QMainWindow):
             new_chapter_id = self.data_manager.add_chapter(self.current_book_id, volume, title)
             self.load_chapters_for_book(self.current_book_id)
             self.find_and_select_chapter(new_chapter_id)
+            # 自动选中并加载新章节
+            self.on_chapter_selected(self.chapter_tree.currentIndex())
+
 
     def rename_chapter(self, chapter_id):
         chapter_details = self.data_manager.get_chapter_details(chapter_id)
@@ -771,10 +769,12 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"当前没有打开的章节可供保存。", 2000)
         return False
         
-    def update_editor_highlighter(self):
+    def refresh_editor_highlighter(self):
         if self.current_book_id:
             settings_names = self.data_manager.get_all_settings_names(self.current_book_id)
             self.editor.update_highlighter(settings_names)
+        else:
+            self.editor.update_highlighter([])
             
     def on_text_changed(self):
         if not self.editor.signalsBlocked():
@@ -787,10 +787,14 @@ class MainWindow(QMainWindow):
         if not self.current_chapter_id:
             self.typing_speed = 0
             self.typing_timer.stop()
+            self.typing_speed_label.setText("速度: 0 字/分")
             return
+
         current_char_count = len(self.editor.toPlainText().strip())
         chars_typed = current_char_count - self.last_char_count
-        self.typing_speed = (chars_typed / 5) * 60
+        
+        # 5秒计算一次，乘以12得到每分钟的字数
+        self.typing_speed = chars_typed * 12 
         self.typing_speed_label.setText(f"速度: {int(self.typing_speed)} 字/分")
         self.last_char_count = current_char_count
 
@@ -812,8 +816,8 @@ class MainWindow(QMainWindow):
     def setup_snapshot_timer(self):
         self.snapshot_timer = QTimer(self)
         self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
-        self.snapshot_timer.start(60 * 1000) # 60秒
-        print("快照线(Snapshot Line)增量备份已启动，每60秒检查一次。")
+        self.snapshot_timer.start(5 * 60 * 1000) # 5分钟
+        print("快照线(Snapshot Line)增量备份已启动，每5分钟检查一次。")
 
     def setup_stage_point_timer(self):
         self.stage_point_timer = QTimer(self)
@@ -828,3 +832,9 @@ class MainWindow(QMainWindow):
         if self.is_text_changed: self.save_current_chapter()
         dialog = BackupDialog(self.backup_manager, self)
         dialog.exec()
+        if dialog.result() == QDialog.Accepted:
+            self.load_books()
+            self.chapter_model.clear()
+            self.editor.clear()
+            self.current_book_id = None
+            self.current_chapter_id = None

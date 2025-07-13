@@ -10,24 +10,23 @@ class SettingsHighlighter(QSyntaxHighlighter):
         self.highlighting_rules = []
         
         self.highlight_format = QTextCharFormat()
-        self.update_highlight_color() # 初始化颜色
+        self.update_highlight_color()
 
     def update_highlight_color(self):
         """根据当前应用的主题更新高亮颜色"""
-        # 通过检查QApplication的调色板来判断是亮色还是暗色主题
-        # 暗色主题的基色会比窗口文字颜色更亮
-        if QApplication.instance().palette().base().color().lightness() < QApplication.instance().palette().windowText().color().lightness():
-            # 暗色主题
-            self.highlight_format.setBackground(QColor("#015a9e")) # Darker shade for dark theme
-            self.highlight_format.setForeground(QColor("#e0e0e0")) # 亮灰色文字
-        else:
-            # 亮色主题
-            self.highlight_format.setBackground(QColor("#d9e9f7")) # Lighter shade for light theme
-            self.highlight_format.setForeground(QColor("#000000")) # 黑色文字
+        palette = QApplication.instance().palette()
+        base_lightness = palette.base().color().lightness()
+        text_lightness = palette.windowText().color().lightness()
+
+        if base_lightness < text_lightness: # 暗色主题
+            self.highlight_format.setBackground(QColor("#015a9e"))
+            self.highlight_format.setForeground(QColor("#e0e0e0"))
+        else: # 亮色主题
+            self.highlight_format.setBackground(QColor("#d9e9f7"))
+            self.highlight_format.setForeground(QColor("#000000"))
 
         self.highlight_format.setFontWeight(QFont.Bold)
         self.highlight_format.setToolTip("这是一个设定")
-        # 重新高亮整个文档以应用新颜色
         self.rehighlight()
 
     def set_settings_list(self, settings_list):
@@ -36,9 +35,12 @@ class SettingsHighlighter(QSyntaxHighlighter):
             self.rehighlight()
             return
         
-        for setting in settings_list:
-            # 使用 \b 保证是全词匹配
-            pattern = QRegularExpression(f"\\b{setting}\\b")
+        # 对列表进行排序，优先匹配更长的单词
+        sorted_list = sorted(settings_list, key=len, reverse=True)
+
+        for setting in sorted_list:
+            # 使用 \b 保证是全词匹配, Qt的正则引擎
+            pattern = QRegularExpression(f"\\b{QRegularExpression.escape(setting)}\\b")
             self.highlighting_rules.append((pattern, self.highlight_format))
         
         self.rehighlight()
@@ -55,16 +57,18 @@ class Editor(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlighter = SettingsHighlighter(self.document())
-        # 设置Tab键的宽度为4个空格
-        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
-
-    def set_font_size(self, size):
+        self.set_font_size("16px") # 设置默认字体大小
+        
+    def set_font_size(self, size_str):
         """设置编辑器字体大小"""
         font = self.font()
-        font.setPointSize(size)
-        self.setFont(font)
-        # 更新Tab键宽度以适应新字体
-        self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
+        try:
+            size = int(size_str.replace('px', ''))
+            font.setPointSize(size)
+            self.setFont(font)
+            self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
+        except ValueError:
+            print(f"无效的字体大小: {size_str}")
 
 
     def auto_indent_document(self):
@@ -73,23 +77,20 @@ class Editor(QTextEdit):
         cursor = self.textCursor()
         cursor.beginEditBlock()
 
-        # 保存当前视口位置
         scrollbar = self.verticalScrollBar()
         old_value = scrollbar.value()
 
-        # 处理文本
         new_content = []
         for i in range(self.document().blockCount()):
             block = self.document().findBlockByNumber(i)
             line = block.text()
-            if line.strip() and not line.startswith("　　") and not line.startswith("    "):
+            if line.strip() and not line.startswith("　　") and not line.startswith("    ") and not line.startswith("#"):
                  new_content.append("　　" + line)
             else:
                  new_content.append(line)
         
         self.setPlainText("\n".join(new_content))
 
-        # 恢复视口位置
         scrollbar.setValue(old_value)
 
         cursor.endEditBlock()
@@ -101,7 +102,6 @@ class Editor(QTextEdit):
         cursor = self.textCursor()
         cursor.beginEditBlock()
 
-        # 保存当前视口位置
         scrollbar = self.verticalScrollBar()
         old_value = scrollbar.value()
 
@@ -118,7 +118,6 @@ class Editor(QTextEdit):
 
         self.setPlainText("\n".join(new_content))
 
-        # 恢复视口位置
         scrollbar.setValue(old_value)
 
         cursor.endEditBlock()
@@ -127,52 +126,50 @@ class Editor(QTextEdit):
     def update_highlighter(self, settings_list):
         """外部调用此方法来更新需要高亮的设定词汇"""
         self.highlighter.set_settings_list(settings_list)
-        # 当高亮列表更新时，也检查并更新颜色
         self.highlighter.update_highlight_color()
 
     def keyPressEvent(self, event):
         """重写按键事件以实现中文首行缩进和Tab功能"""
-        # 处理回车键
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            super().keyPressEvent(event) # 首先执行默认的回车操作
+        cursor = self.textCursor()
+        
+        if event.key() in [Qt.Key_Return, Qt.Key_Enter]:
+            
+            # 如果当前行是列表项 (e.g.,以'- ', '* '开头)，则自动创建新列表项
+            block_text = cursor.block().text()
+            if block_text.strip().startswith(("- ", "* ")):
+                super().keyPressEvent(event)
+                self.insertPlainText(block_text.split()[0] + " ")
+                return
 
-            # 实现中文首行缩进
-            cursor = self.textCursor()
-            block = cursor.block().previous() # 获取上一段
+            # 默认回车行为
+            super().keyPressEvent(event)
 
-            # 如果是文档开头，或者上一行是空行，则认为是新段落的开始
-            if not block.isValid() or len(block.text().strip()) == 0:
-                self.insertPlainText("　　") # 插入两个全角空格
-            # 否则，意味着在段落中间换行，不添加额外缩进
-            else:
-                # 继承上一行的缩进（用于代码或手动对齐的场景）
-                indentation = ""
-                for char in block.text():
-                    if char.isspace():
-                        indentation += char
-                    else:
-                        break
-                self.insertPlainText(indentation)
+            # 获取上一段(即当前光标所在新行的前一行)
+            prev_block = cursor.block().previous() 
+            if prev_block.text().strip(): # 如果上一行不是空行
+                 self.insertPlainText("　　") # 新段落首行缩进
+            return
 
         # 处理Tab键
         elif event.key() == Qt.Key_Tab:
-            cursor = self.textCursor()
-            cursor.insertText("    ") # 插入四个空格
+            cursor.insertText("    ")
+            return
             
         # 处理Shift+Tab（反向缩进）
         elif event.key() == Qt.Key_Backtab:
-            cursor = self.textCursor()
             if not cursor.hasSelection():
-                # 移动到行首
+                line_text = cursor.block().text()
                 start_pos = cursor.positionInBlock()
-                cursor.movePosition(cursor.StartOfBlock, cursor.MoveAnchor)
-                # 检查前四个字符是否是空格
-                cursor.movePosition(cursor.Right, cursor.KeepAnchor, 4)
-                if cursor.selectedText() == "    ":
+
+                if line_text.startswith("　　"):
+                    cursor.movePosition(cursor.StartOfBlock)
+                    cursor.movePosition(cursor.Right, cursor.KeepAnchor, 2)
                     cursor.removeSelectedText()
-                else:
-                    # 如果不是四个空格，则移动回原来的位置
-                    cursor.setPosition(cursor.anchor())
-                    cursor.setPosition(start_pos, cursor.MoveAnchor)
-        else:
-            super().keyPressEvent(event)
+                elif line_text.startswith("    "):
+                    cursor.movePosition(cursor.StartOfBlock)
+                    cursor.movePosition(cursor.Right, cursor.KeepAnchor, 4)
+                    cursor.removeSelectedText()
+            # (可以扩展多行反缩进的逻辑)
+            return
+            
+        super().keyPressEvent(event)
