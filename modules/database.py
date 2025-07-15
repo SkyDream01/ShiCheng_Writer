@@ -310,6 +310,11 @@ class DataManager:
         cursor.execute("UPDATE chapters SET title = ? WHERE id = ?", (new_title, chapter_id))
         self.conn.commit()
 
+    def delete_chapter(self, chapter_id): # [修改] 实现删除章节
+        cursor = self.conn.cursor()
+        cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
+        self.conn.commit()
+
     def update_volume_name(self, book_id, old_volume_name, new_volume_name):
         cursor = self.conn.cursor()
         cursor.execute("UPDATE chapters SET volume = ? WHERE book_id = ? AND volume = ?",
@@ -502,6 +507,17 @@ class DataManager:
 
     def add_timeline_event_from_backup(self, event_data):
         cursor = self.conn.cursor()
+        # [修改] 修正 referenced_materials 的问题
+        referenced_materials = event_data.get('referenced_materials')
+        if isinstance(referenced_materials, str):
+            try: # 尝试解析已经存在的 JSON 字符串
+                json.loads(referenced_materials)
+            except json.JSONDecodeError: # 如果解析失败，说明不是一个有效的 JSON 字符串
+                referenced_materials = json.dumps([]) # 创建一个空的 JSON 数组
+        else:
+             referenced_materials = json.dumps(referenced_materials or [])
+
+
         cursor.execute("""
             INSERT OR REPLACE INTO timeline_events 
             (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials) 
@@ -510,7 +526,7 @@ class DataManager:
             event_data['id'], event_data['timeline_id'], event_data.get('parent_id'),
             event_data['title'], event_data.get('content'), event_data.get('event_time'),
             event_data.get('order_index', 0), event_data.get('status'), 
-            event_data.get('referenced_materials')
+            referenced_materials
         ))
         self.conn.commit()
 
@@ -521,6 +537,9 @@ class DataManager:
         cursor.execute("DELETE FROM timeline_events WHERE timeline_id = ?", (timeline_id,))
         # 再插入新事件
         for event in events_data:
+            # [修改]  确保 referenced_materials 是一个 JSON 字符串
+            referenced_materials_json = json.dumps(event.get('referenced_materials', []))
+
             cursor.execute("""
             INSERT INTO timeline_events 
             (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
@@ -528,7 +547,7 @@ class DataManager:
             """, (
                 event.get('id'), timeline_id, event.get('parent_id'), event.get('title'),
                 event.get('content'), event.get('event_time'), event.get('order_index'),
-                event.get('status'), json.dumps(event.get('referenced_materials', []))
+                event.get('status'), referenced_materials_json
             ))
         self.conn.commit()
     # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

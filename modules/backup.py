@@ -211,11 +211,34 @@ class BackupManager(QObject):
                 elif file.lower().endswith('.bcb'):
                     backup_info["type"] = "BCB 备份"
                     backups.append(backup_info)
+                elif file.startswith('backup_snapshot_') and file.endswith('.json'):
+                    backup_info["type"] = "快照线"
+                    backups.append(backup_info)
         except OSError:
             pass
         
         backups.sort(key=lambda x: x['file'], reverse=True)
         return backups
+
+    def restore_from_snapshot(self, backup_info):
+        backup_path = os.path.join(backup_info['dir'], backup_info['file'])
+        if not os.path.exists(backup_path):
+            self.log_message.emit("快照备份文件不存在。")
+            return False
+
+        try:
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                snapshot_data = json.load(f)
+            
+            chapters_to_restore = snapshot_data.get("chapters", [])
+            for chapter_data in chapters_to_restore:
+                self.data_manager.update_chapter_content(chapter_data['id'], chapter_data['content'])
+            
+            self.log_message.emit(f"成功从快照恢复 {len(chapters_to_restore)} 个章节。")
+            return True
+        except Exception as e:
+            self.log_message.emit(f"从快照恢复失败: {e}")
+            return False
 
     def restore_from_backup(self, backup_info):
         backup_path = os.path.join(backup_info['dir'], backup_info['file'])

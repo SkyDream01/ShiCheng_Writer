@@ -16,18 +16,8 @@ from modules.database import DataManager
 from widgets.editor import Editor
 from modules.material_system import MaterialPanel
 from modules.inspiration import InspirationPanel
-# vvvvvvvvvv [新增] 导入 TimelinePanel vvvvvvvvvv
 from modules.timeline_system import TimelinePanel
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-def resource_path(relative_path):
-    """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
-    try:
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)
+from modules.utils import resource_path # [修改] 从 utils 导入
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
@@ -48,7 +38,7 @@ class BackupDialog(QDialog):
         button_layout.addWidget(restore_button)
         button_layout.addWidget(delete_button)
         
-        layout.addWidget(QLabel("所有可恢复的完整备份 (按时间倒序):"))
+        layout.addWidget(QLabel("所有可恢复的备份 (按时间倒序):"))
         layout.addWidget(self.backup_list)
         layout.addLayout(button_layout)
         
@@ -58,7 +48,7 @@ class BackupDialog(QDialog):
         self.backup_list.clear()
         self.backups_data = self.backup_manager.list_backups()
         if not self.backups_data:
-            self.backup_list.addItem("暂无完整备份文件")
+            self.backup_list.addItem("暂无备份文件")
         else:
             for backup in self.backups_data:
                 item_text = f"[{backup['type']}] {backup['file']}"
@@ -72,19 +62,33 @@ class BackupDialog(QDialog):
             
         backup_info = self.backups_data[selected_index]
         
-        reply = QMessageBox.warning(self, "确认恢复",
-                                     f"您确定要从 {backup_info['type']} 备份\n'{backup_info['file']}'\n恢复吗？\n"
-                                     "【警告】此操作将完全覆盖当前所有数据！\n"
-                                     "恢复后必须重启应用才能看到更改。\n"
-                                     "操作无法撤销，请谨慎操作！",
-                                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            if self.backup_manager.restore_from_backup(backup_info):
-                QMessageBox.information(self, "成功", "数据已从备份恢复。\n请立即重启应用程序以应用更改。")
-                self.parent().load_books()
-                self.accept()
-            else:
-                QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看状态栏或控制台输出。")
+        if backup_info['type'] == '快照线':
+            reply = QMessageBox.question(self, "确认恢复",
+                                         f"您确定要从快照\n'{backup_info['file']}'\n恢复吗？\n"
+                                         "【注意】此操作将只恢复快照中包含的章节内容，\n"
+                                         "不会影响书籍、章节结构或其他数据。",
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                if self.backup_manager.restore_from_snapshot(backup_info):
+                    QMessageBox.information(self, "成功", "数据已从快照恢复。\n请检查相关章节内容。")
+                    self.parent().load_chapters_for_book(self.parent().current_book_id) # 刷新当前章节列表
+                    self.accept()
+                else:
+                    QMessageBox.critical(self, "失败", "恢复过程中发生错误。")
+        else: # 完整备份
+            reply = QMessageBox.warning(self, "确认恢复",
+                                         f"您确定要从 {backup_info['type']} 备份\n'{backup_info['file']}'\n恢复吗？\n"
+                                         "【警告】此操作将完全覆盖当前所有数据！\n"
+                                         "恢复后必须重启应用才能看到更改。\n"
+                                         "操作无法撤销，请谨慎操作！",
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.Yes:
+                if self.backup_manager.restore_from_backup(backup_info):
+                    QMessageBox.information(self, "成功", "数据已从备份恢复。\n请立即重启应用程序以应用更改。")
+                    self.parent().load_books()
+                    self.accept()
+                else:
+                    QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看状态栏或控制台输出。")
 
     def delete_backup(self):
         selected_index = self.backup_list.currentRow()
@@ -304,10 +308,7 @@ class MainWindow(QMainWindow):
         book_toolbar = QToolBar()
         add_book_action = QAction(QIcon(resource_path("resources/icons/add.png")), "新建书籍", self)
         add_book_action.triggered.connect(self.add_new_book)
-        import_book_action = QAction(QIcon(resource_path("resources/icons/import.png")), "导入书籍", self)
-        import_book_action.triggered.connect(self.import_book)
         book_toolbar.addAction(add_book_action)
-        book_toolbar.addAction(import_book_action)
 
         self.book_tree = QTreeView()
         self.book_tree.setHeaderHidden(True)
@@ -369,12 +370,10 @@ class MainWindow(QMainWindow):
         self.right_tabs = QTabWidget()
         self.material_panel = MaterialPanel(self.data_manager, self)
         self.inspiration_panel = InspirationPanel(self.data_manager, self)
-        # vvvvvvvvvv [新增] 创建 TimelinePanel 实例 vvvvvvvvvv
         self.timeline_panel = TimelinePanel(self.data_manager, self)
         self.right_tabs.addTab(self.material_panel, "素材仓库")
         self.right_tabs.addTab(self.inspiration_panel, "灵感中心")
         self.right_tabs.addTab(self.timeline_panel, "时间轴")
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         return self.right_tabs
 
 
@@ -432,13 +431,18 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.export_action)
         file_menu.addSeparator()
 
-        backup_now_action = QAction("立即创建阶段点备份", self)
+        group_manage_action = QAction("分组管理", self)
+        group_manage_action.triggered.connect(self.open_group_manager)
+        file_menu.addAction(group_manage_action)
+
+        backup_menu = file_menu.addMenu("备份")
+        backup_now_action = QAction("立即备份", self)
         backup_now_action.triggered.connect(self.backup_manager.create_stage_point_backup)
-        file_menu.addAction(backup_now_action)
+        backup_menu.addAction(backup_now_action)
 
         backup_manage_action = QAction("备份管理", self)
         backup_manage_action.triggered.connect(self.open_backup_manager)
-        file_menu.addAction(backup_manage_action)
+        backup_menu.addAction(backup_manage_action)
 
         file_menu.addSeparator()
         exit_action = QAction("退出", self)
@@ -454,11 +458,6 @@ class MainWindow(QMainWindow):
 
         view_menu = menu_bar.addMenu("视图")
         view_menu.addAction(self.toggle_theme_action)
-
-        tools_menu = menu_bar.addMenu("工具")
-        group_manage_action = QAction("分组管理", self)
-        group_manage_action.triggered.connect(self.open_group_manager)
-        tools_menu.addAction(group_manage_action)
 
 
     def update_theme(self, new_theme):
@@ -540,11 +539,9 @@ class MainWindow(QMainWindow):
 
             self.current_book_id = book_id
             self.load_chapters_for_book(book_id)
-            # vvvvvvvvvv [修改] 刷新所有右侧面板 vvvvvvvvvv
             self.material_panel.set_book(book_id)
             self.inspiration_panel.refresh_all()
             self.timeline_panel.set_book(book_id)
-            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             self.refresh_editor_highlighter()
             self.setWindowTitle(f"诗成写作 - {item.text()}")
             self.add_chapter_action.setEnabled(True)
@@ -587,7 +584,7 @@ class MainWindow(QMainWindow):
         action = menu.exec_(self.chapter_tree.viewport().mapToGlobal(position))
         if isinstance(data, int):
             if action == rename_chapter_action: self.rename_chapter(data)
-            # elif action == delete_chapter_action: self.delete_chapter(data) # To be implemented
+            elif action == delete_chapter_action: self.delete_chapter(data)
         else:
             if action == rename_volume_action: self.rename_volume(item.text())
 
@@ -635,11 +632,6 @@ class MainWindow(QMainWindow):
             self.data_manager.update_book(book_id, book_details.get('title'), book_details.get('description'), book_details.get('cover_path'), group)
             self.load_books()
 
-    def import_book(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "导入书籍", "", "文本文件 (*.txt);;Word文档 (*.docx)")
-        if file_path:
-            QMessageBox.information(self, "提示", f"从 {os.path.basename(file_path)} 导入书籍的功能待实现。")
-            
     def export_book(self, book_id):
         if not book_id:
             QMessageBox.warning(self, "提示", "请先选择一本书籍进行导出。")
@@ -736,6 +728,17 @@ class MainWindow(QMainWindow):
             self.load_chapters_for_book(self.current_book_id)
             self.statusBar().showMessage(f"章节已重命名为《{new_title}》", 3000)
 
+    def delete_chapter(self, chapter_id):
+        reply = QMessageBox.question(self, '确认删除', "确定要删除这个章节吗？\n该操作无法撤销。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            chapter_details = self.data_manager.get_chapter_details(chapter_id)
+            self.data_manager.delete_chapter(chapter_id)
+            self.load_chapters_for_book(self.current_book_id)
+            if self.current_chapter_id == chapter_id:
+                self.current_chapter_id = None
+                self.editor.clear()
+            self.statusBar().showMessage(f"章节《{chapter_details['title']}》已删除。", 3000)
+
     def rename_volume(self, old_volume_name):
         new_volume_name, ok = QInputDialog.getText(self, "重命名卷", "请输入新的卷名:", text=old_volume_name)
         if ok and new_volume_name and new_volume_name != old_volume_name:
@@ -816,8 +819,8 @@ class MainWindow(QMainWindow):
     def setup_snapshot_timer(self):
         self.snapshot_timer = QTimer(self)
         self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
-        self.snapshot_timer.start(5 * 60 * 1000) # 5 minutes
-        self.show_status_message("快照线(Snapshot Line)增量备份已启动，每5分钟检查一次。")
+        self.snapshot_timer.start(1 * 60 * 1000) # 1 minutes
+        self.show_status_message("快照线(Snapshot Line)增量备份已启动，每1分钟检查一次。")
 
     def setup_stage_point_timer(self):
         self.stage_point_timer = QTimer(self)
