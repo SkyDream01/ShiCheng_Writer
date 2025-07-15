@@ -14,7 +14,9 @@ from PySide6.QtCore import Qt, QSize, QTimer
 from modules.theme_manager import set_stylesheet
 from modules.database import DataManager
 from widgets.editor import Editor
-from modules.settings_system import SettingsPanel
+# vvvvvvvvvv [修改] 导入 MaterialPanel vvvvvvvvvv
+from modules.material_system import MaterialPanel
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 from modules.inspiration import InspirationPanel
 
 def resource_path(relative_path):
@@ -229,10 +231,8 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
         self.setWindowIcon(QIcon(resource_path('resources/icons/logo.png')))
 
-        # 连接备份管理器的信号到状态栏
         self.backup_manager.log_message.connect(self.show_status_message)
 
-        # UI 和其他部分的设置
         self.setup_ui()
         self.setup_actions()
         self.setup_menu_bar()
@@ -244,13 +244,12 @@ class MainWindow(QMainWindow):
         self.run_archive_backup()
 
         self.typing_timer = QTimer(self)
-        self.typing_timer.setInterval(5000) # 5秒计算一次
+        self.typing_timer.setInterval(5000)
         self.typing_timer.timeout.connect(self.update_typing_speed)
         self.last_char_count = 0
         self.typing_speed = 0
     
     def show_status_message(self, message):
-        """在状态栏显示消息，持续5秒"""
         self.statusBar().showMessage(message, 5000)
 
     def setup_ui(self):
@@ -272,10 +271,10 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.splitter)
         self.setCentralWidget(main_widget)
 
-        # Connect signals after UI elements are created
         self.editor.textChanged.connect(self.on_text_changed)
-        self.settings_panel.settings_changed.connect(self.refresh_editor_highlighter)
-
+        # vvvvvvvvvv [修改] 连接 material_panel 的信号 vvvvvvvvvv
+        self.material_panel.materials_changed.connect(self.refresh_editor_highlighter)
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     def setup_status_bar(self):
         status_bar = self.statusBar()
@@ -369,9 +368,11 @@ class MainWindow(QMainWindow):
 
     def create_right_panel(self):
         self.right_tabs = QTabWidget()
-        self.settings_panel = SettingsPanel(self.data_manager, self)
+        # vvvvvvvvvv [修改] 创建 MaterialPanel 实例 vvvvvvvvvv
+        self.material_panel = MaterialPanel(self.data_manager, self)
         self.inspiration_panel = InspirationPanel(self.data_manager, self)
-        self.right_tabs.addTab(self.settings_panel, "设定仓库")
+        self.right_tabs.addTab(self.material_panel, "素材仓库")
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.right_tabs.addTab(self.inspiration_panel, "灵感中心")
         return self.right_tabs
 
@@ -527,11 +528,8 @@ class MainWindow(QMainWindow):
 
     def on_book_selected(self, index):
         item = self.book_model.itemFromIndex(index)
-        if not item: return
-        
-        item_type = item.data(Qt.UserRole)
-        if item_type == "group":
-            return 
+        if not item or item.data(Qt.UserRole) == "group":
+            return
             
         book_id = item.data(Qt.UserRole)
 
@@ -541,7 +539,9 @@ class MainWindow(QMainWindow):
 
             self.current_book_id = book_id
             self.load_chapters_for_book(book_id)
-            self.settings_panel.set_book(book_id)
+            # vvvvvvvvvv [修改] 调用 material_panel 的函数 vvvvvvvvvv
+            self.material_panel.set_book(book_id)
+            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             self.inspiration_panel.refresh_all()
             self.refresh_editor_highlighter()
             self.setWindowTitle(f"诗成写作 - {item.text()}")
@@ -580,12 +580,12 @@ class MainWindow(QMainWindow):
         if isinstance(data, int):
             rename_chapter_action = menu.addAction("重命名章节")
             delete_chapter_action = menu.addAction("删除章节")
-        else:
+        else: # Is a volume
             rename_volume_action = menu.addAction("重命名卷")
         action = menu.exec_(self.chapter_tree.viewport().mapToGlobal(position))
         if isinstance(data, int):
             if action == rename_chapter_action: self.rename_chapter(data)
-            # elif action == delete_chapter_action: self.delete_chapter(data) # 待实现
+            # elif action == delete_chapter_action: self.delete_chapter(data) # To be implemented
         else:
             if action == rename_volume_action: self.rename_volume(item.text())
 
@@ -661,7 +661,6 @@ class MainWindow(QMainWindow):
                             f.write(f"\n{'#'*2} {current_volume}\n\n")
                         chapter_id = chapter_data['id']
                         content, _ = self.data_manager.get_chapter_content(chapter_id)
-                        # clean_content = content.strip()
                         f.write(f"### {chapter_data['title']}\n\n")
                         f.write(content)
                         f.write("\n\n" + "-"*15 + "\n\n")
@@ -688,26 +687,28 @@ class MainWindow(QMainWindow):
 
     def on_chapter_selected(self, index):
         item = self.chapter_model.itemFromIndex(index)
-        if not item: return
-        data = item.data(Qt.UserRole)
-        if isinstance(data, int):
-            if self.is_text_changed and self.current_chapter_id != data:
-                reply = QMessageBox.question(self, "保存提示", "当前章节已修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
-                if reply == QMessageBox.Save: self.save_current_chapter()
-                elif reply == QMessageBox.Cancel:
-                    self.find_and_select_chapter(self.current_chapter_id, force_select=True)
-                    return
-            self.current_chapter_id = data
-            content, count = self.data_manager.get_chapter_content(data)
-            self.editor.blockSignals(True)
-            self.editor.setText(content)
-            self.editor.blockSignals(False)
-            self.is_text_changed = False
-            self.word_count_label.setText(f"字数: {count}")
-            self.typing_speed_label.setText("速度: 0 字/分")
-            self.statusBar().showMessage(f"已打开章节: {item.text()}", 3000)
-            self.last_char_count = count
-            if not self.typing_timer.isActive(): self.typing_timer.start()
+        if not item or not isinstance(item.data(Qt.UserRole), int):
+             return
+        
+        chapter_id = item.data(Qt.UserRole)
+        if self.is_text_changed and self.current_chapter_id != chapter_id:
+            reply = QMessageBox.question(self, "保存提示", "当前章节已修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
+            if reply == QMessageBox.Save: self.save_current_chapter()
+            elif reply == QMessageBox.Cancel:
+                self.find_and_select_chapter(self.current_chapter_id, force_select=True)
+                return
+        
+        self.current_chapter_id = chapter_id
+        content, count = self.data_manager.get_chapter_content(chapter_id)
+        self.editor.blockSignals(True)
+        self.editor.setPlainText(content) # Use setPlainText for cleaner loading
+        self.editor.blockSignals(False)
+        self.is_text_changed = False
+        self.word_count_label.setText(f"字数: {count}")
+        self.typing_speed_label.setText("速度: 0 字/分")
+        self.statusBar().showMessage(f"已打开章节: {item.text()}", 3000)
+        self.last_char_count = count
+        if not self.typing_timer.isActive(): self.typing_timer.start()
 
     def add_new_chapter(self):
         if self.current_book_id is None:
@@ -722,10 +723,7 @@ class MainWindow(QMainWindow):
         if ok_title and title:
             new_chapter_id = self.data_manager.add_chapter(self.current_book_id, volume, title)
             self.load_chapters_for_book(self.current_book_id)
-            self.find_and_select_chapter(new_chapter_id)
-            # 自动选中并加载新章节
-            self.on_chapter_selected(self.chapter_tree.currentIndex())
-
+            self.find_and_select_chapter(new_chapter_id, force_select=True)
 
     def rename_chapter(self, chapter_id):
         chapter_details = self.data_manager.get_chapter_details(chapter_id)
@@ -772,8 +770,10 @@ class MainWindow(QMainWindow):
         
     def refresh_editor_highlighter(self):
         if self.current_book_id:
-            settings_names = self.data_manager.get_all_settings_names(self.current_book_id)
-            self.editor.update_highlighter(settings_names)
+            # vvvvvvvvvv [修改] 调用新的 material 函数 vvvvvvvvvv
+            materials_names = self.data_manager.get_all_materials_names(self.current_book_id)
+            self.editor.update_highlighter(materials_names)
+            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         else:
             self.editor.update_highlighter([])
             
@@ -794,8 +794,7 @@ class MainWindow(QMainWindow):
         current_char_count = len(self.editor.toPlainText().strip())
         chars_typed = current_char_count - self.last_char_count
         
-        # 5秒计算一次，乘以12得到每分钟的字数
-        self.typing_speed = chars_typed * 12 
+        self.typing_speed = chars_typed * (60 / (self.typing_timer.interval() / 1000))
         self.typing_speed_label.setText(f"速度: {int(self.typing_speed)} 字/分")
         self.last_char_count = current_char_count
 
@@ -817,13 +816,13 @@ class MainWindow(QMainWindow):
     def setup_snapshot_timer(self):
         self.snapshot_timer = QTimer(self)
         self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
-        self.snapshot_timer.start(5 * 60 * 1000) # 5分钟
+        self.snapshot_timer.start(5 * 60 * 1000) # 5 minutes
         self.show_status_message("快照线(Snapshot Line)增量备份已启动，每5分钟检查一次。")
 
     def setup_stage_point_timer(self):
         self.stage_point_timer = QTimer(self)
         self.stage_point_timer.timeout.connect(self.backup_manager.create_stage_point_backup)
-        self.stage_point_timer.start(30 * 60 * 1000) # 30分钟
+        self.stage_point_timer.start(30 * 60 * 1000) # 30 minutes
         self.show_status_message("阶段点(Stage Point)定时备份已启动，每30分钟执行一次。")
         
     def run_archive_backup(self):

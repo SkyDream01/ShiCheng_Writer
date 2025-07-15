@@ -14,10 +14,10 @@ class BackupManager(QObject):
     - 阶段点 (Stage Point): 关键节点完整备份。
     - 日终归档 (End-of-Day Archive): 每日完整备份。
     """
-    log_message = Signal(str) # 定义一个用于发送消息的信号
+    log_message = Signal(str)
 
     def __init__(self, data_manager, base_backup_dir="backups"):
-        super().__init__() # 初始化父类 QObject
+        super().__init__()
         self.data_manager = data_manager
         self.base_backup_dir = base_backup_dir
         
@@ -27,9 +27,6 @@ class BackupManager(QObject):
         self.last_snapshot_check_time = datetime.now()
 
     def create_snapshot_backup(self):
-        """
-        创建一次增量备份 (快照线)。
-        """
         modified_chapters = self.data_manager.get_chapters_modified_since(self.last_snapshot_check_time)
         
         if not modified_chapters:
@@ -62,13 +59,11 @@ class BackupManager(QObject):
         self._cleanup_backups("backup_snapshot_", 15)
 
     def create_stage_point_backup(self):
-        """创建一次完整的项目备份 (阶段点)。"""
         self.log_message.emit("正在创建阶段点备份...")
         if self._create_full_backup("backup_stage_"):
             self._cleanup_backups("backup_stage_", 5)
 
     def create_archive_backup(self):
-        """创建每日首次启动时的备份 (日终归档)。"""
         today_str = datetime.now().strftime("%Y-%m-%d")
         if any(f.startswith(f"backup_archive_{today_str}") for f in os.listdir(self.base_backup_dir)):
             self.log_message.emit(f"今日已存在日终归档备份，将跳过。")
@@ -79,12 +74,8 @@ class BackupManager(QObject):
             self._cleanup_backups("backup_archive_", 15)
 
     def _create_full_backup(self, prefix):
-        """
-        创建并压缩一个完整的项目备份。
-        """
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
-                # 1. 备份书籍和章节
                 book_root_path = os.path.join(temp_dir, 'book')
                 os.makedirs(book_root_path)
 
@@ -93,7 +84,7 @@ class BackupManager(QObject):
                 
                 if all_books:
                     for book in all_books:
-                        book_folder_name = str(book['id']) # 使用ID作为文件夹名
+                        book_folder_name = str(book['id'])
                         book_path = os.path.join(book_root_path, book_folder_name)
                         content_path = os.path.join(book_path, 'content')
                         os.makedirs(content_path)
@@ -118,16 +109,10 @@ class BackupManager(QObject):
 
                             vol_name = chapter['volume'] or "未分卷"
                             if vol_name not in volumes_structure:
-                                volumes_structure[vol_name] = {
-                                    "name": vol_name,
-                                    "children": [],
-                                    "createTime": None
-                                }
+                                volumes_structure[vol_name] = {"name": vol_name, "children": [], "createTime": None}
                             volumes_structure[vol_name]['children'].append({
-                                "name": chapter['title'],
-                                "count": chapter['word_count'],
-                                "createTime": chapter['createTime'],
-                                "volumeName": vol_name
+                                "name": chapter['title'], "count": chapter['word_count'],
+                                "createTime": chapter['createTime'], "volumeName": vol_name
                             })
 
                         book_data_for_json = self.data_manager.get_book_details(book['id'])
@@ -141,22 +126,21 @@ class BackupManager(QObject):
                         
                         book_list_data.append({
                             "name": book['title'], "author": "", "createTime": book['createTime'],
-                            "totalCount": total_word_count, "lastEditInfo": last_edit_chapter,
-                            "id": book['id'] # 添加ID
+                            "totalCount": total_word_count, "lastEditInfo": last_edit_chapter, "id": book['id']
                         })
                 
                 booklist_path = os.path.join(book_root_path, 'bookList.json')
                 with open(booklist_path, 'w', encoding='utf-8') as f:
                     json.dump(book_list_data, f, ensure_ascii=False, indent=4)
 
-                # 2. 备份设定
-                all_settings = self.data_manager.get_all_settings()
-                if all_settings:
-                    settings_filepath = os.path.join(temp_dir, 'settings.json')
-                    with open(settings_filepath, 'w', encoding='utf-8') as f:
-                        json.dump(all_settings, f, ensure_ascii=False, indent=4)
+                # vvvvvvvvvv [修改] 备份 materials vvvvvvvvvv
+                all_materials = self.data_manager.get_all_materials()
+                if all_materials:
+                    materials_filepath = os.path.join(temp_dir, 'materials.json')
+                    with open(materials_filepath, 'w', encoding='utf-8') as f:
+                        json.dump(all_materials, f, ensure_ascii=False, indent=4)
+                # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                # 3. 备份灵感
                 all_insp_items = self.data_manager.get_all_inspiration_items()
                 if all_insp_items:
                     insp_items_filepath = os.path.join(temp_dir, 'inspiration_items.json')
@@ -169,8 +153,6 @@ class BackupManager(QObject):
                     with open(insp_fragments_filepath, 'w', encoding='utf-8') as f:
                         json.dump(all_insp_fragments, f, ensure_ascii=False, indent=4)
 
-
-                # 4. 压缩所有文件
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 zip_filename = f"{prefix}{timestamp}.zip"
                 zip_filepath = os.path.join(self.base_backup_dir, zip_filename)
@@ -191,7 +173,6 @@ class BackupManager(QObject):
             return False
 
     def _cleanup_backups(self, prefix, keep_count):
-        """清理指定类型的备份文件。"""
         try:
             files = [f for f in os.listdir(self.base_backup_dir) if f.startswith(prefix)]
             files.sort(key=lambda name: os.path.getmtime(os.path.join(self.base_backup_dir, name)), reverse=True)
@@ -204,7 +185,6 @@ class BackupManager(QObject):
             self.log_message.emit(f"清理 {prefix} 备份时出错: {e}")
 
     def list_backups(self):
-        """列出所有可供恢复的完整备份 (阶段点、日终归档和 .bcb 文件)。"""
         backups = []
         try:
             files = os.listdir(self.base_backup_dir)
@@ -226,9 +206,6 @@ class BackupManager(QObject):
         return backups
 
     def restore_from_backup(self, backup_info):
-        """
-        从指定的完整备份文件恢复。
-        """
         backup_path = os.path.join(backup_info['dir'], backup_info['file'])
         if not os.path.exists(backup_path):
             self.log_message.emit("备份文件不存在。")
@@ -243,7 +220,6 @@ class BackupManager(QObject):
                 
                 self.data_manager.clear_all_writing_data()
 
-                # 1. 恢复书籍和章节
                 book_root_path = os.path.join(temp_dir, 'book')
                 booklist_path = os.path.join(book_root_path, 'bookList.json') if os.path.exists(book_root_path) else None
 
@@ -251,15 +227,12 @@ class BackupManager(QObject):
                     with open(booklist_path, 'r', encoding='utf-8') as f:
                         book_list = json.load(f)
                     
-                    for book_info in book_list:
-                        book_folder_name = str(book_info.get('id') or book_info['createTime'])
+                    for book_info_item in book_list:
+                        book_folder_name = str(book_info_item.get('id') or book_info_item['createTime'])
                         book_json_path = os.path.join(book_root_path, book_folder_name, 'book.json')
-
                         if not os.path.exists(book_json_path): continue
                         
-                        with open(book_json_path, 'r', encoding='utf-8') as f:
-                            book_data = json.load(f)
-
+                        with open(book_json_path, 'r', encoding='utf-8') as f: book_data = json.load(f)
                         new_book_id = self.data_manager.add_book_from_backup(book_data)
 
                         for volume in book_data.get('children', []):
@@ -267,36 +240,32 @@ class BackupManager(QObject):
                                 content_filename = os.path.join(book_root_path, book_folder_name, 'content', f"{chapter['createTime']}.json")
                                 if not os.path.exists(content_filename): continue
                                 
-                                with open(content_filename, 'r', encoding='utf-8') as f:
-                                    content_data = json.load(f)
-
+                                with open(content_filename, 'r', encoding='utf-8') as f: content_data = json.load(f)
                                 self.data_manager.add_chapter_from_backup(new_book_id, chapter, content_data)
                 
-                # 如果不是 .bcb 备份，则恢复其他内容
                 is_bcb_backup = backup_info.get("type") == "BCB 备份"
                 if not is_bcb_backup:
-                    # 2. 恢复设定
-                    settings_filepath = os.path.join(temp_dir, 'settings.json')
-                    if os.path.exists(settings_filepath):
-                        with open(settings_filepath, 'r', encoding='utf-8') as f:
-                            settings_list = json.load(f)
-                        for setting_data in settings_list:
-                            self.data_manager.add_setting_from_backup(setting_data)
+                    # vvvvvvvvvv [修改] 恢复 materials，并兼容旧的 settings.json vvvvvvvvvv
+                    materials_filepath = os.path.join(temp_dir, 'materials.json')
+                    if not os.path.exists(materials_filepath):
+                        materials_filepath = os.path.join(temp_dir, 'settings.json') # Fallback
 
-                    # 3. 恢复灵感
+                    if os.path.exists(materials_filepath):
+                        with open(materials_filepath, 'r', encoding='utf-8') as f:
+                            materials_list = json.load(f)
+                        for material_data in materials_list:
+                            self.data_manager.add_material_from_backup(material_data)
+                    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
                     insp_items_filepath = os.path.join(temp_dir, 'inspiration_items.json')
                     if os.path.exists(insp_items_filepath):
                         with open(insp_items_filepath, 'r', encoding='utf-8') as f:
-                            items_list = json.load(f)
-                        for item_data in items_list:
-                            self.data_manager.add_inspiration_item_from_backup(item_data)
+                            self.data_manager.add_inspiration_item_from_backup(json.load(f))
                     
                     insp_fragments_filepath = os.path.join(temp_dir, 'inspiration_fragments.json')
                     if os.path.exists(insp_fragments_filepath):
                         with open(insp_fragments_filepath, 'r', encoding='utf-8') as f:
-                            fragments_list = json.load(f)
-                        for fragment_data in fragments_list:
-                            self.data_manager.add_inspiration_fragment_from_backup(fragment_data)
+                            self.data_manager.add_inspiration_fragment_from_backup(json.load(f))
 
             self.log_message.emit("数据库恢复成功。请重启应用以刷新界面。")
             return True
@@ -307,7 +276,6 @@ class BackupManager(QObject):
             return False
             
     def delete_backup(self, backup_info):
-        """删除指定的备份文件"""
         backup_path = os.path.join(backup_info['dir'], backup_info['file'])
         if not os.path.exists(backup_path):
             self.log_message.emit("要删除的备份文件不存在。")

@@ -43,8 +43,9 @@ def initialize_database():
         FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
     )
     """)
+    # vvvvvvvvvv [修改] settings 表改为 materials 表 vvvvvvvvvv
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS settings (
+    CREATE TABLE IF NOT EXISTS materials (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         type TEXT NOT NULL,
@@ -55,6 +56,7 @@ def initialize_database():
         UNIQUE(name, book_id)
     )
     """)
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS recycle_bin (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +93,16 @@ def initialize_database():
     """)
 
     # --- 2. 执行数据库迁移 ---
+    # vvvvvvvvvv [新增] 从 settings 到 materials 的迁移逻辑 vvvvvvvvvv
+    try:
+        cursor.execute("PRAGMA table_info(settings)")
+        if cursor.fetchone():
+            cursor.execute("ALTER TABLE settings RENAME TO materials")
+            print("数据库表 'settings' 已成功迁移到 'materials'。")
+    except sqlite3.OperationalError:
+        pass # 表不存在，无需迁移
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        
     cursor.execute("PRAGMA table_info(books)")
     columns = [row['name'] for row in cursor.fetchall()]
     if 'cover_path' not in columns:
@@ -282,90 +294,94 @@ class DataManager:
                        (new_volume_name, book_id, old_volume_name))
         self.conn.commit()
 
-    def get_all_settings_names(self, book_id=None):
+    # vvvvvvvvvv [修改] 所有 setting 函数重命名为 material 函数 vvvvvvvvvv
+    def get_all_materials_names(self, book_id=None):
         cursor = self.conn.cursor()
         if book_id:
-            cursor.execute("SELECT name FROM settings WHERE book_id IS NULL OR book_id = ?", (book_id,))
+            cursor.execute("SELECT name FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
         else:
-            cursor.execute("SELECT name FROM settings WHERE book_id IS NULL")
+            cursor.execute("SELECT name FROM materials WHERE book_id IS NULL")
         return [row['name'] for row in cursor.fetchall()]
 
-    def get_settings(self, book_id=None):
+    def get_materials(self, book_id=None):
         cursor = self.conn.cursor()
         if book_id:
-             cursor.execute("SELECT * FROM settings WHERE book_id IS NULL OR book_id = ?", (book_id,))
+             cursor.execute("SELECT * FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
         else:
-             cursor.execute("SELECT * FROM settings WHERE book_id IS NULL")
+             cursor.execute("SELECT * FROM materials WHERE book_id IS NULL")
         return [dict(row) for row in cursor.fetchall()]
         
-    def get_all_settings(self):
+    def get_all_materials(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM settings")
+        cursor.execute("SELECT * FROM materials")
         return [dict(row) for row in cursor.fetchall()]
 
-    def get_setting_details(self, setting_id):
+    def get_material_details(self, material_id):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM settings WHERE id = ?", (setting_id,))
+        cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
         row = cursor.fetchone()
         if not row:
             return None
         
-        setting_data = dict(row)
-        if setting_data['content']:
+        material_data = dict(row)
+        if material_data['content']:
             try:
-                setting_data['content'] = json.loads(setting_data['content'])
+                material_data['content'] = json.loads(material_data['content'])
             except (json.JSONDecodeError, TypeError):
-                setting_data['content'] = {'value': setting_data['content']} # 兼容旧纯文本数据
+                # 兼容旧的纯文本数据
+                material_data['content'] = {'value': material_data['content']} 
         else:
-            setting_data['content'] = {}
+            material_data['content'] = {}
             
-        return setting_data
+        return material_data
 
-    def add_setting(self, name, type, description, book_id=None, content=None):
+    def add_material(self, name, type, description, book_id=None, content=None):
         try:
             content_json = json.dumps(content if content is not None else {})
             cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO settings (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
+            cursor.execute("INSERT INTO materials (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
                            (name, type, description, book_id, content_json))
             self.conn.commit()
             return cursor.lastrowid
         except sqlite3.IntegrityError:
+            print(f"添加素材 '{name}' 失败：名称已存在。")
             return None
             
-    def add_setting_from_backup(self, setting_data):
+    def add_material_from_backup(self, material_data):
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO settings (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
-                       (setting_data['id'], setting_data['name'], setting_data['type'], 
-                        setting_data['description'], setting_data['content'], setting_data['book_id']))
+        # 兼容旧的 settings 字段
+        content = material_data.get('content') or material_data.get('settings')
+        cursor.execute("INSERT OR REPLACE INTO materials (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
+                       (material_data['id'], material_data['name'], material_data['type'], 
+                        material_data.get('description', ''), content, material_data.get('book_id')))
         self.conn.commit()
 
 
-    def update_setting(self, setting_id, name, type, description, content=None):
+    def update_material(self, material_id, name, type, description, content=None):
         try:
             content_json = json.dumps(content if content is not None else {})
             cursor = self.conn.cursor()
             cursor.execute("""
-                UPDATE settings SET name = ?, type = ?, description = ?, content = ?
+                UPDATE materials SET name = ?, type = ?, description = ?, content = ?
                 WHERE id = ?
-            """, (name, type, description, content_json, setting_id))
+            """, (name, type, description, content_json, material_id))
             self.conn.commit()
             return True
         except Exception as e:
-            # 保持这个print用于调试关键错误
-            print(f"数据库更新设定失败: {e}")
+            print(f"数据库更新素材失败: {e}")
             return False
 
-    def delete_setting(self, setting_id):
+    def delete_material(self, material_id):
         try:
             cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM settings WHERE id = ?", (setting_id,))
+            cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
             self.conn.commit()
             return True
         except Exception as e:
-            # 保持这个print用于调试关键错误
-            print(f"删除设定失败: {e}")
+            print(f"删除素材失败: {e}")
             return False
-
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            
     def get_all_groups(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT DISTINCT `group` FROM books WHERE `group` IS NOT NULL AND `group` != '' ORDER BY `group`")
@@ -402,9 +418,9 @@ class DataManager:
         
     def add_inspiration_fragment_from_backup(self, fragment_data):
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO inspiration_fragments (id, type, content, source, created_at) VALUES (?, ?, ?, ?, ?)",
+        cursor.execute("INSERT OR REPLACE INTO inspiration_fragments (id, type, content, source, created_at) VALUES (?, ?, ?, ?, ?)",
                        (fragment_data['id'], fragment_data['type'], fragment_data['content'], 
-                        fragment_data['source'], fragment_data['created_at']))
+                        fragment_data.get('source', ''), fragment_data.get('created_at')))
         self.conn.commit()
 
     def get_inspiration_items(self):
@@ -426,16 +442,18 @@ class DataManager:
         
     def add_inspiration_item_from_backup(self, item_data):
         cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
-                       (item_data['id'], item_data['title'], item_data['content'], 
-                        item_data['tags'], item_data['parent_id']))
+        cursor.execute("INSERT OR REPLACE INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
+                       (item_data['id'], item_data['title'], item_data.get('content', ''), 
+                        item_data.get('tags', ''), item_data.get('parent_id')))
         self.conn.commit()
 
         
     def clear_all_writing_data(self):
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM chapters")
-        cursor.execute("DELETE FROM settings")
+        # vvvvvvvvvv [修改] 删除 materials 表数据 vvvvvvvvvv
+        cursor.execute("DELETE FROM materials")
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         cursor.execute("DELETE FROM books")
         cursor.execute("DELETE FROM inspiration_items")
         cursor.execute("DELETE FROM inspiration_fragments")
