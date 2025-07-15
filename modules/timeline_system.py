@@ -57,19 +57,15 @@ class TimelineEditDialog(QDialog):
         add_event_action.triggered.connect(self.add_event)
         remove_event_action = QAction("删除事件", self)
         remove_event_action.triggered.connect(self.remove_event)
-        # vvvvvvvvvv [新增] 添加提升和降低层级的操作 vvvvvvvvvv
         promote_action = QAction("提升层级", self)
         promote_action.triggered.connect(self.promote_event)
         demote_action = QAction("降低层级", self)
         demote_action.triggered.connect(self.demote_event)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         toolbar.addAction(add_event_action)
         toolbar.addAction(remove_event_action)
-        # vvvvvvvvvv [新增] 将操作添加到工具栏 vvvvvvvvvv
         toolbar.addSeparator()
         toolbar.addAction(promote_action)
         toolbar.addAction(demote_action)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         
         self.tree_view = QTreeView()
         self.tree_view.setHeaderHidden(True)
@@ -77,7 +73,8 @@ class TimelineEditDialog(QDialog):
         self.tree_view.setModel(self.tree_model)
         self.tree_view.setDragDropMode(QTreeView.InternalMove)
         self.tree_view.setSelectionMode(QTreeView.SingleSelection)
-        self.tree_model.rowsMoved.connect(lambda: self.set_dirty(True))
+        # 核心功能：当行移动（拖拽完成）后，连接到 on_rows_moved 函数
+        self.tree_model.rowsMoved.connect(self.on_rows_moved)
 
         left_layout.addWidget(toolbar)
         left_layout.addWidget(self.tree_view)
@@ -104,32 +101,57 @@ class TimelineEditDialog(QDialog):
 
     def _connect_signals(self):
         self.tree_view.selectionModel().currentChanged.connect(self.on_event_selected)
-        self.title_edit.textChanged.connect(lambda: self.set_dirty(True))
-        self.time_edit.textChanged.connect(lambda: self.set_dirty(True))
+        self.title_edit.textChanged.connect(self.on_title_or_time_changed)
+        self.time_edit.textChanged.connect(self.on_title_or_time_changed)
         self.status_combo.currentTextChanged.connect(lambda: self.set_dirty(True))
         self.content_edit.textChanged.connect(lambda: self.set_dirty(True))
 
     def set_dirty(self, dirty=True):
         self.is_dirty = dirty
 
+    def on_rows_moved(self, parent, start, end, destination, dest_row):
+        """当行被拖拽移动后触发，实现编号实时更新"""
+        self.update_item_numbers()
+        self.set_dirty(True)
+
+    def update_item_numbers(self):
+        """遍历整个树，更新所有项目的层级编号和显示文本"""
+        root = self.tree_model.invisibleRootItem()
+        
+        def traverse(parent_item, prefix=""):
+            for i in range(parent_item.rowCount()):
+                item = parent_item.child(i)
+                if not item: continue
+                event_data = item.data(Qt.UserRole)
+                if not event_data: continue
+                
+                # 构建新的编号和显示文本
+                number = f"{prefix}{i + 1}"
+                display_text = f"{number}. [{event_data.get('event_time', '')}] {event_data.get('title', '无标题')}"
+                item.setText(display_text)
+
+                # 递归处理子节点
+                if item.hasChildren():
+                    traverse(item, prefix=f"{number}.")
+        
+        traverse(root)
+
     def load_events(self):
+        """从数据库加载事件并构建树"""
         self.tree_model.clear()
         events = self.data_manager.get_timeline_events(self.timeline_id)
         
         item_map = {}
         root_item = self.tree_model.invisibleRootItem()
         
-        # 先创建所有 item
+        # 第一次遍历：创建所有item
         for event in events:
-            # vvvvvvvvvv [修改] 显示时间点和标题 vvvvvvvvvv
-            display_text = f"[{event.get('event_time', '')}] {event['title']}"
-            item = QStandardItem(display_text)
-            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+            item = QStandardItem(event['title']) # 临时标题
             item.setData(event, Qt.UserRole)
             item.setEditable(False)
             item_map[event['id']] = item
 
-        # 再构建树结构
+        # 第二次遍历：构建父子关系
         for event in events:
             item = item_map[event['id']]
             parent_id = event.get('parent_id')
@@ -140,10 +162,12 @@ class TimelineEditDialog(QDialog):
                 root_item.appendRow(item)
 
         self.tree_view.expandAll()
+        self.update_item_numbers() # 初始化编号
         self.set_dirty(False)
 
     def on_event_selected(self, current_index, previous_index):
-        if self.is_dirty:
+        """当选择的事件变化时触发"""
+        if self.is_dirty and previous_index.isValid():
             self.save_current_event_details(previous_index)
         
         if not current_index.isValid():
@@ -154,65 +178,90 @@ class TimelineEditDialog(QDialog):
         self.current_item = self.tree_model.itemFromIndex(current_index)
         event_data = self.current_item.data(Qt.UserRole)
         
+        # 暂时禁用信号，避免填充数据时触发不必要的操作
+        self.title_edit.blockSignals(True)
+        self.time_edit.blockSignals(True)
+
         self.title_edit.setText(event_data.get('title', ''))
         self.time_edit.setText(event_data.get('event_time', ''))
         self.status_combo.setCurrentText(event_data.get('status', '未开始'))
         self.content_edit.setText(event_data.get('content', ''))
         
+        self.title_edit.blockSignals(False)
+        self.time_edit.blockSignals(False)
+
         self.set_dirty(False)
 
+    def on_title_or_time_changed(self):
+        """当标题或时间点文本框变化时，实时更新树视图中的项目文本"""
+        if not self.current_item: return
+        self.set_dirty(True)
+
+        # 更新数据模型中的数据
+        data = self.current_item.data(Qt.UserRole)
+        data['title'] = self.title_edit.text()
+        data['event_time'] = self.time_edit.text()
+        self.current_item.setData(data, Qt.UserRole)
+        
+        # 刷新整个树的编号和显示
+        self.update_item_numbers()
+
     def save_current_event_details(self, index_to_save):
+        """保存当前编辑区的内容到对应的Item中"""
         if not index_to_save.isValid(): return
         
         item_to_save = self.tree_model.itemFromIndex(index_to_save)
         if not item_to_save: return
 
         data = item_to_save.data(Qt.UserRole)
-        data['title'] = self.title_edit.text()
-        data['event_time'] = self.time_edit.text()
         data['status'] = self.status_combo.currentText()
         data['content'] = self.content_edit.toPlainText()
+        # 标题和时间点已在 on_title_or_time_changed 中实时保存
         
-        # vvvvvvvvvv [修改] 更新 item 显示文本 vvvvvvvvvv
-        display_text = f"[{data.get('event_time', '')}] {data['title']}"
-        item_to_save.setText(display_text)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         item_to_save.setData(data, Qt.UserRole)
-        self.set_dirty(True)
 
     def clear_editor_fields(self):
+        """清空右侧编辑面板"""
         self.title_edit.clear()
         self.time_edit.clear()
         self.content_edit.clear()
         self.status_combo.setCurrentIndex(0)
 
     def add_event(self):
+        """添加新事件"""
         parent_item = self.tree_model.invisibleRootItem()
         parent_id = None
         
         current_index = self.tree_view.currentIndex()
         if current_index.isValid():
-            parent_item = self.tree_model.itemFromIndex(current_index)
-            parent_id = parent_item.data(Qt.UserRole)['id']
+            selected_item = self.tree_model.itemFromIndex(current_index)
+            # 智能判断：如果选中项是叶子节点，则作为兄弟节点添加，否则作为子节点
+            if selected_item.hasChildren():
+                parent_item = selected_item
+                parent_id = parent_item.data(Qt.UserRole)['id']
+            else:
+                parent_item = selected_item.parent() or self.tree_model.invisibleRootItem()
+                if selected_item.parent():
+                    parent_id = selected_item.parent().data(Qt.UserRole)['id']
 
         new_event = {
-            "id": int(time.time() * 1000), # 临时唯一ID
+            "id": int(time.time() * 1000), # 毫秒级时间戳作为临时ID
             "timeline_id": self.timeline_id,
             "parent_id": parent_id,
             "title": "新事件",
             "content": "", "event_time": "",
             "status": "未开始", "referenced_materials": "[]"
         }
-        # vvvvvvvvvv [修改] 创建 item 时也包含时间 vvvvvvvvvv
-        display_text = f"[{new_event.get('event_time', '')}] {new_event['title']}"
-        item = QStandardItem(display_text)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        item = QStandardItem()
         item.setData(new_event, Qt.UserRole)
         parent_item.appendRow(item)
+
         self.tree_view.expandAll()
+        self.update_item_numbers()
         self.set_dirty(True)
 
     def remove_event(self):
+        """删除选中事件"""
         index = self.tree_view.currentIndex()
         if not index.isValid(): return
         
@@ -220,10 +269,11 @@ class TimelineEditDialog(QDialog):
                                      QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             self.tree_model.removeRow(index.row(), index.parent())
+            self.update_item_numbers()
             self.set_dirty(True)
 
-    # vvvvvvvvvv [新增] 实现提升和降低层级的方法 vvvvvvvvvv
     def promote_event(self):
+        """提升层级"""
         index = self.tree_view.currentIndex()
         if not index.isValid(): return
 
@@ -231,49 +281,49 @@ class TimelineEditDialog(QDialog):
         parent = item.parent()
 
         if parent and parent != self.tree_model.invisibleRootItem():
-            # 从原父节点移除
-            taken_item = parent.takeRow(item.row())
-            # 添加到祖父节点
-            grandparent = parent.parent()
-            if grandparent:
-                grandparent.appendRow(taken_item)
-            else:
-                self.tree_model.invisibleRootItem().appendRow(taken_item)
+            taken_item = parent.takeRow(item.row())[0] # takeRow returns a list
+            grandparent = parent.parent() or self.tree_model.invisibleRootItem()
+            grandparent.appendRow(taken_item)
+            
+            self.update_item_numbers()
             self.set_dirty(True)
 
     def demote_event(self):
+        """降低层级"""
         index = self.tree_view.currentIndex()
-        if not index.isValid() or index.row() == 0: return
+        if not index.isValid() or index.row() == 0: return # 根节点或第一个子节点不能降级
 
         item = self.tree_model.itemFromIndex(index)
-        parent = item.parent()
-        if not parent: parent = self.tree_model.invisibleRootItem()
+        parent = item.parent() or self.tree_model.invisibleRootItem()
 
-        # 找到它上面的同级节点
+        # 成为前一个兄弟节点的子节点
         sibling_item = parent.child(item.row() - 1)
         if sibling_item:
-            # 从原父节点移除
-            taken_item = parent.takeRow(item.row())
-            # 添加到新的父节点（原同级节点）
+            taken_item = parent.takeRow(item.row())[0]
             sibling_item.appendRow(taken_item)
             self.tree_view.expand(sibling_item.index())
+            self.update_item_numbers()
             self.set_dirty(True)
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     def save_and_close(self):
-        self.save_current_event_details(self.tree_view.currentIndex())
+        """保存所有更改并关闭对话框"""
+        current_index = self.tree_view.currentIndex()
+        if self.is_dirty and current_index.isValid():
+            self.save_current_event_details(current_index)
+
         all_events = []
         
         def recurse_save(parent_item, parent_id=None):
             for row in range(parent_item.rowCount()):
-                item = parent_item.child(row)
+                item = parent_item.child(row, 0)
                 if not item: continue
+                
                 data = item.data(Qt.UserRole)
                 data['order_index'] = row
                 data['parent_id'] = parent_id
                 all_events.append(data)
                 
-                if 'id' in data and item.hasChildren():
+                if item.hasChildren():
                     recurse_save(item, data['id'])
         
         recurse_save(self.tree_model.invisibleRootItem())
@@ -282,6 +332,7 @@ class TimelineEditDialog(QDialog):
         self.accept()
         
     def reject(self):
+        """关闭对话框，若有未保存更改则提示"""
         if self.is_dirty:
             reply = QMessageBox.question(self, "确认退出", "有未保存的更改，您确定要退出吗？",
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
@@ -335,7 +386,7 @@ class TimelinePanel(QWidget):
             self.data_manager.add_timeline(self.current_book_id, name)
             self.load_timelines()
             
-    def edit_selected_timeline(self):
+    def edit_selected_timeline(self, item=None):
         selected_item = self.list_widget.currentItem()
         if not selected_item: 
             QMessageBox.warning(self, "提示", "请先选择一个时间轴。")
@@ -344,4 +395,4 @@ class TimelinePanel(QWidget):
         timeline_id = selected_item.data(Qt.UserRole)
         dialog = TimelineEditDialog(self.data_manager, timeline_id, self.current_book_id, self)
         dialog.exec()
-        self.load_timelines() # 刷新列表以防名称等被更改
+        self.load_timelines() # 刷新列表
