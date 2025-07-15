@@ -43,7 +43,6 @@ def initialize_database():
         FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
     )
     """)
-    # vvvvvvvvvv [修改] settings 表改为 materials 表 vvvvvvvvvv
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS materials (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +55,6 @@ def initialize_database():
         UNIQUE(name, book_id)
     )
     """)
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS recycle_bin (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,9 +89,34 @@ def initialize_database():
         value TEXT
     )
     """)
+    # vvvvvvvvvv [新增] 时间轴功能相关的表 vvvvvvvvvv
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS timelines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT,
+        FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS timeline_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timeline_id INTEGER NOT NULL,
+        parent_id INTEGER,
+        title TEXT NOT NULL,
+        content TEXT,
+        event_time TEXT,
+        order_index INTEGER DEFAULT 0,
+        status TEXT,
+        referenced_materials TEXT,
+        FOREIGN KEY (timeline_id) REFERENCES timelines (id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_id) REFERENCES timeline_events (id) ON DELETE CASCADE
+    )
+    """)
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     # --- 2. 执行数据库迁移 ---
-    # vvvvvvvvvv [新增] 从 settings 到 materials 的迁移逻辑 vvvvvvvvvv
     try:
         cursor.execute("PRAGMA table_info(settings)")
         if cursor.fetchone():
@@ -101,7 +124,6 @@ def initialize_database():
             print("数据库表 'settings' 已成功迁移到 'materials'。")
     except sqlite3.OperationalError:
         pass # 表不存在，无需迁移
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         
     cursor.execute("PRAGMA table_info(books)")
     columns = [row['name'] for row in cursor.fetchall()]
@@ -294,7 +316,6 @@ class DataManager:
                        (new_volume_name, book_id, old_volume_name))
         self.conn.commit()
 
-    # vvvvvvvvvv [修改] 所有 setting 函数重命名为 material 函数 vvvvvvvvvv
     def get_all_materials_names(self, book_id=None):
         cursor = self.conn.cursor()
         if book_id:
@@ -328,7 +349,6 @@ class DataManager:
             try:
                 material_data['content'] = json.loads(material_data['content'])
             except (json.JSONDecodeError, TypeError):
-                # 兼容旧的纯文本数据
                 material_data['content'] = {'value': material_data['content']} 
         else:
             material_data['content'] = {}
@@ -349,7 +369,6 @@ class DataManager:
             
     def add_material_from_backup(self, material_data):
         cursor = self.conn.cursor()
-        # 兼容旧的 settings 字段
         content = material_data.get('content') or material_data.get('settings')
         cursor.execute("INSERT OR REPLACE INTO materials (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
                        (material_data['id'], material_data['name'], material_data['type'], 
@@ -380,7 +399,6 @@ class DataManager:
         except Exception as e:
             print(f"删除素材失败: {e}")
             return False
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             
     def get_all_groups(self):
         cursor = self.conn.cursor()
@@ -447,13 +465,82 @@ class DataManager:
                         item_data.get('tags', ''), item_data.get('parent_id')))
         self.conn.commit()
 
-        
+    # vvvvvvvvvv [新增] 时间轴相关的数据库操作 vvvvvvvvvv
+    def get_timelines_for_book(self, book_id):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM timelines WHERE book_id = ? ORDER BY name", (book_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_timelines(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM timelines")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def add_timeline(self, book_id, name, description=""):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT INTO timelines (book_id, name, description) VALUES (?, ?, ?)",
+                       (book_id, name, description))
+        self.conn.commit()
+        return cursor.lastrowid
+    
+    def add_timeline_from_backup(self, timeline_data):
+        cursor = self.conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO timelines (id, book_id, name, description) VALUES (?, ?, ?, ?)",
+                       (timeline_data['id'], timeline_data['book_id'], timeline_data['name'], 
+                        timeline_data.get('description', '')))
+        self.conn.commit()
+
+    def get_timeline_events(self, timeline_id):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM timeline_events WHERE timeline_id = ? ORDER BY order_index", (timeline_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_timeline_events(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM timeline_events")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def add_timeline_event_from_backup(self, event_data):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO timeline_events 
+            (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event_data['id'], event_data['timeline_id'], event_data.get('parent_id'),
+            event_data['title'], event_data.get('content'), event_data.get('event_time'),
+            event_data.get('order_index', 0), event_data.get('status'), 
+            event_data.get('referenced_materials')
+        ))
+        self.conn.commit()
+
+    def update_timeline_events(self, timeline_id, events_data):
+        """一次性更新一个时间轴的所有事件，用于保存排序、层级等"""
+        cursor = self.conn.cursor()
+        # 先删除现有事件
+        cursor.execute("DELETE FROM timeline_events WHERE timeline_id = ?", (timeline_id,))
+        # 再插入新事件
+        for event in events_data:
+            cursor.execute("""
+            INSERT INTO timeline_events 
+            (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                event.get('id'), timeline_id, event.get('parent_id'), event.get('title'),
+                event.get('content'), event.get('event_time'), event.get('order_index'),
+                event.get('status'), json.dumps(event.get('referenced_materials', []))
+            ))
+        self.conn.commit()
+    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
     def clear_all_writing_data(self):
         cursor = self.conn.cursor()
+        # vvvvvvvvvv [修改] 清理时也删除时间轴数据 vvvvvvvvvv
+        cursor.execute("DELETE FROM timeline_events")
+        cursor.execute("DELETE FROM timelines")
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         cursor.execute("DELETE FROM chapters")
-        # vvvvvvvvvv [修改] 删除 materials 表数据 vvvvvvvvvv
         cursor.execute("DELETE FROM materials")
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         cursor.execute("DELETE FROM books")
         cursor.execute("DELETE FROM inspiration_items")
         cursor.execute("DELETE FROM inspiration_fragments")

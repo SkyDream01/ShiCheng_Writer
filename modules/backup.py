@@ -133,13 +133,11 @@ class BackupManager(QObject):
                 with open(booklist_path, 'w', encoding='utf-8') as f:
                     json.dump(book_list_data, f, ensure_ascii=False, indent=4)
 
-                # vvvvvvvvvv [修改] 备份 materials vvvvvvvvvv
                 all_materials = self.data_manager.get_all_materials()
                 if all_materials:
                     materials_filepath = os.path.join(temp_dir, 'materials.json')
                     with open(materials_filepath, 'w', encoding='utf-8') as f:
                         json.dump(all_materials, f, ensure_ascii=False, indent=4)
-                # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 all_insp_items = self.data_manager.get_all_inspiration_items()
                 if all_insp_items:
@@ -152,6 +150,20 @@ class BackupManager(QObject):
                     insp_fragments_filepath = os.path.join(temp_dir, 'inspiration_fragments.json')
                     with open(insp_fragments_filepath, 'w', encoding='utf-8') as f:
                         json.dump(all_insp_fragments, f, ensure_ascii=False, indent=4)
+
+                # vvvvvvvvvv [新增] 备份时间轴数据 vvvvvvvvvv
+                all_timelines = self.data_manager.get_all_timelines()
+                if all_timelines:
+                    timelines_filepath = os.path.join(temp_dir, 'timelines.json')
+                    with open(timelines_filepath, 'w', encoding='utf-8') as f:
+                        json.dump(all_timelines, f, ensure_ascii=False, indent=4)
+                
+                all_timeline_events = self.data_manager.get_all_timeline_events()
+                if all_timeline_events:
+                    events_filepath = os.path.join(temp_dir, 'timeline_events.json')
+                    with open(events_filepath, 'w', encoding='utf-8') as f:
+                        json.dump(all_timeline_events, f, ensure_ascii=False, indent=4)
+                # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 zip_filename = f"{prefix}{timestamp}.zip"
@@ -245,7 +257,6 @@ class BackupManager(QObject):
                 
                 is_bcb_backup = backup_info.get("type") == "BCB 备份"
                 if not is_bcb_backup:
-                    # vvvvvvvvvv [修改] 恢复 materials，并兼容旧的 settings.json vvvvvvvvvv
                     materials_filepath = os.path.join(temp_dir, 'materials.json')
                     if not os.path.exists(materials_filepath):
                         materials_filepath = os.path.join(temp_dir, 'settings.json') # Fallback
@@ -255,7 +266,6 @@ class BackupManager(QObject):
                             materials_list = json.load(f)
                         for material_data in materials_list:
                             self.data_manager.add_material_from_backup(material_data)
-                    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                     insp_items_filepath = os.path.join(temp_dir, 'inspiration_items.json')
                     if os.path.exists(insp_items_filepath):
@@ -266,6 +276,22 @@ class BackupManager(QObject):
                     if os.path.exists(insp_fragments_filepath):
                         with open(insp_fragments_filepath, 'r', encoding='utf-8') as f:
                             self.data_manager.add_inspiration_fragment_from_backup(json.load(f))
+
+                    # vvvvvvvvvv [新增] 恢复时间轴数据 vvvvvvvvvv
+                    timelines_filepath = os.path.join(temp_dir, 'timelines.json')
+                    if os.path.exists(timelines_filepath):
+                        with open(timelines_filepath, 'r', encoding='utf-8') as f:
+                            timelines_list = json.load(f)
+                        for tl_data in timelines_list:
+                            self.data_manager.add_timeline_from_backup(tl_data)
+
+                    events_filepath = os.path.join(temp_dir, 'timeline_events.json')
+                    if os.path.exists(events_filepath):
+                        with open(events_filepath, 'r', encoding='utf-8') as f:
+                            events_list = json.load(f)
+                        for event_data in events_list:
+                            self.data_manager.add_timeline_event_from_backup(event_data)
+                    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
             self.log_message.emit("数据库恢复成功。请重启应用以刷新界面。")
             return True

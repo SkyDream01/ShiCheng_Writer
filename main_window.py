@@ -14,10 +14,11 @@ from PySide6.QtCore import Qt, QSize, QTimer
 from modules.theme_manager import set_stylesheet
 from modules.database import DataManager
 from widgets.editor import Editor
-# vvvvvvvvvv [修改] 导入 MaterialPanel vvvvvvvvvv
 from modules.material_system import MaterialPanel
-# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 from modules.inspiration import InspirationPanel
+# vvvvvvvvvv [新增] 导入 TimelinePanel vvvvvvvvvv
+from modules.timeline_system import TimelinePanel
+# ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 def resource_path(relative_path):
     """ 获取资源的绝对路径，无论是开发环境还是打包环境 """
@@ -272,9 +273,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
 
         self.editor.textChanged.connect(self.on_text_changed)
-        # vvvvvvvvvv [修改] 连接 material_panel 的信号 vvvvvvvvvv
         self.material_panel.materials_changed.connect(self.refresh_editor_highlighter)
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     def setup_status_bar(self):
         status_bar = self.statusBar()
@@ -368,12 +367,14 @@ class MainWindow(QMainWindow):
 
     def create_right_panel(self):
         self.right_tabs = QTabWidget()
-        # vvvvvvvvvv [修改] 创建 MaterialPanel 实例 vvvvvvvvvv
         self.material_panel = MaterialPanel(self.data_manager, self)
         self.inspiration_panel = InspirationPanel(self.data_manager, self)
+        # vvvvvvvvvv [新增] 创建 TimelinePanel 实例 vvvvvvvvvv
+        self.timeline_panel = TimelinePanel(self.data_manager, self)
         self.right_tabs.addTab(self.material_panel, "素材仓库")
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.right_tabs.addTab(self.inspiration_panel, "灵感中心")
+        self.right_tabs.addTab(self.timeline_panel, "时间轴")
+        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         return self.right_tabs
 
 
@@ -539,10 +540,11 @@ class MainWindow(QMainWindow):
 
             self.current_book_id = book_id
             self.load_chapters_for_book(book_id)
-            # vvvvvvvvvv [修改] 调用 material_panel 的函数 vvvvvvvvvv
+            # vvvvvvvvvv [修改] 刷新所有右侧面板 vvvvvvvvvv
             self.material_panel.set_book(book_id)
-            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             self.inspiration_panel.refresh_all()
+            self.timeline_panel.set_book(book_id)
+            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
             self.refresh_editor_highlighter()
             self.setWindowTitle(f"诗成写作 - {item.text()}")
             self.add_chapter_action.setEnabled(True)
@@ -701,7 +703,7 @@ class MainWindow(QMainWindow):
         self.current_chapter_id = chapter_id
         content, count = self.data_manager.get_chapter_content(chapter_id)
         self.editor.blockSignals(True)
-        self.editor.setPlainText(content) # Use setPlainText for cleaner loading
+        self.editor.setPlainText(content)
         self.editor.blockSignals(False)
         self.is_text_changed = False
         self.word_count_label.setText(f"字数: {count}")
@@ -770,10 +772,8 @@ class MainWindow(QMainWindow):
         
     def refresh_editor_highlighter(self):
         if self.current_book_id:
-            # vvvvvvvvvv [修改] 调用新的 material 函数 vvvvvvvvvv
             materials_names = self.data_manager.get_all_materials_names(self.current_book_id)
             self.editor.update_highlighter(materials_names)
-            # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         else:
             self.editor.update_highlighter([])
             
