@@ -2,12 +2,14 @@
 import sys
 import os
 import shutil
+import tempfile
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QListWidget, QListWidgetItem, QSplitter, QDockWidget,
                                QTreeView, QMessageBox, QInputDialog, QFileDialog,
                                QToolBar, QLabel, QMenu, QPushButton, QStatusBar, QToolButton,
                                QDialog, QDialogButtonBox, QApplication, QFormLayout, QLineEdit,
-                               QTextEdit, QMenuBar, QTabWidget, QFrame, QComboBox)
+                               QTextEdit, QMenuBar, QTabWidget, QFrame, QComboBox, QCheckBox,
+                               QTreeWidget, QTreeWidgetItem, QHeaderView)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon
 from PySide6.QtCore import Qt, QSize, QTimer
 
@@ -17,65 +19,205 @@ from widgets.editor import Editor
 from modules.material_system import MaterialPanel
 from modules.inspiration import InspirationPanel
 from modules.timeline_system import TimelinePanel
-from modules.utils import resource_path # [修改] 从 utils 导入
+from modules.utils import resource_path
+from modules.backup import BackupManager
+
+class WebDAVSettingsDialog(QDialog):
+    """WebDAV 设置对话框"""
+    def __init__(self, data_manager, parent=None):
+        super().__init__(parent)
+        self.data_manager = data_manager
+        # [修改] 直接从父窗口获取 BackupManager 实例
+        self.backup_manager = parent.backup_manager if parent else BackupManager(data_manager)
+        
+        self.setWindowTitle("WebDAV 设置")
+        self.setMinimumSize(400, 300)
+
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+
+        self.enabled_check = QCheckBox("启用 WebDAV 同步")
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://dav.example.com/webdav/")
+        self.user_edit = QLineEdit()
+        self.pass_edit = QLineEdit()
+        self.pass_edit.setEchoMode(QLineEdit.Password)
+        self.root_dir_edit = QLineEdit()
+        self.root_dir_edit.setPlaceholderText("/shicheng/")
+        self.sync_freq_combo = QComboBox()
+        self.sync_freq_combo.addItems(["实时", "每小时", "仅启动时"])
+        
+        form_layout.addRow(self.enabled_check)
+        form_layout.addRow("WebDAV 地址:", self.url_edit)
+        form_layout.addRow("用户名:", self.user_edit)
+        form_layout.addRow("密码/Token:", self.pass_edit)
+        form_layout.addRow("云端根目录:", self.root_dir_edit)
+        form_layout.addRow("同步频率:", self.sync_freq_combo)
+
+        layout.addLayout(form_layout)
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, self)
+        self.test_button = QPushButton("测试连接")
+        buttons.addButton(self.test_button, QDialogButtonBox.ActionRole)
+
+        self.test_button.clicked.connect(self.test_webdav_connection)
+        buttons.accepted.connect(self.save_settings)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.load_settings()
+
+    def load_settings(self):
+        settings = self.data_manager.get_webdav_settings()
+        self.enabled_check.setChecked(settings.get('webdav_enabled', False))
+        self.url_edit.setText(settings.get('webdav_url', ''))
+        self.user_edit.setText(settings.get('webdav_user', ''))
+        self.pass_edit.setText(settings.get('webdav_pass', ''))
+        self.root_dir_edit.setText(settings.get('webdav_root', '/shicheng/'))
+        self.sync_freq_combo.setCurrentText(settings.get('webdav_sync_freq', '实时'))
+
+    def save_settings(self):
+        settings = {
+            'webdav_enabled': self.enabled_check.isChecked(),
+            'webdav_url': self.url_edit.text(),
+            'webdav_user': self.user_edit.text(),
+            'webdav_pass': self.pass_edit.text(),
+            'webdav_root': self.root_dir_edit.text(),
+            'webdav_sync_freq': self.sync_freq_combo.currentText()
+        }
+        self.data_manager.save_webdav_settings(settings)
+        QMessageBox.information(self, "成功", "WebDAV 设置已保存。")
+        self.accept()
+        
+    def test_webdav_connection(self):
+        """测试 WebDAV 连接"""
+        # [修改] 将界面上的当前设置临时保存，以便 backup_manager 可以获取到最新信息
+        current_settings = {
+            'webdav_enabled': self.enabled_check.isChecked(),
+            'webdav_url': self.url_edit.text(),
+            'webdav_user': self.user_edit.text(),
+            'webdav_pass': self.pass_edit.text(),
+            'webdav_root': self.root_dir_edit.text(),
+            'webdav_sync_freq': self.sync_freq_combo.currentText()
+        }
+        self.data_manager.save_webdav_settings(current_settings)
+        
+        self.test_button.setEnabled(False)
+        self.test_button.setText("测试中...")
+        QApplication.processEvents() # 刷新界面
+
+        # [修改] 直接调用 backup_manager 的测试方法
+        success, message = self.backup_manager.test_webdav_connection()
+
+        if success:
+            QMessageBox.information(self, "连接成功", message)
+        else:
+            QMessageBox.critical(self, "连接失败", message)
+            
+        self.test_button.setEnabled(True)
+        self.test_button.setText("测试连接")
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
         super().__init__(parent)
         self.backup_manager = backup_manager
-        self.backups_data = []
-        self.setWindowTitle("备份管理")
-        self.setMinimumSize(450, 350)
+        self.setWindowTitle("备份与恢复")
+        self.setMinimumSize(550, 450)
         
         layout = QVBoxLayout(self)
-        self.backup_list = QListWidget()
-        
+        self.backup_tree = QTreeWidget()
+        self.backup_tree.setHeaderLabels(["备份文件", "类型", "来源"])
+        self.backup_tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+
         button_layout = QHBoxLayout()
         restore_button = QPushButton("恢复选中项")
         restore_button.clicked.connect(self.restore_backup)
         delete_button = QPushButton("删除选中项")
         delete_button.clicked.connect(self.delete_backup)
+        refresh_button = QPushButton("刷新列表")
+        refresh_button.clicked.connect(self.load_backups)
+        
         button_layout.addWidget(restore_button)
         button_layout.addWidget(delete_button)
-        
-        layout.addWidget(QLabel("所有可恢复的备份 (按时间倒序):"))
-        layout.addWidget(self.backup_list)
+        button_layout.addStretch()
+        button_layout.addWidget(refresh_button)
+
+        layout.addWidget(QLabel("选择一个备份进行恢复或删除:"))
+        layout.addWidget(self.backup_tree)
         layout.addLayout(button_layout)
         
         self.load_backups()
 
     def load_backups(self):
-        self.backup_list.clear()
-        self.backups_data = self.backup_manager.list_backups()
-        if not self.backups_data:
-            self.backup_list.addItem("暂无备份文件")
-        else:
-            for backup in self.backups_data:
-                item_text = f"[{backup['type']}] {backup['file']}"
-                self.backup_list.addItem(item_text)
+        self.backup_tree.clear()
+        
+        # Local Backups
+        local_backups = self.backup_manager.list_backups()
+        if local_backups:
+            local_root = QTreeWidgetItem(self.backup_tree, ["本地备份"])
+            for backup in local_backups:
+                backup['source'] = 'local'
+                child = QTreeWidgetItem(local_root, [backup['file'], backup['type'], "本地"])
+                child.setData(0, Qt.UserRole, backup)
+            local_root.setExpanded(True)
+
+        # Cloud Backups
+        remote_backups = self.backup_manager.list_remote_backups()
+        if remote_backups:
+            cloud_root = QTreeWidgetItem(self.backup_tree, ["云端备份 (WebDAV)"])
+            for backup in remote_backups:
+                child = QTreeWidgetItem(cloud_root, [backup['file'], backup['type'], "云端"])
+                child.setData(0, Qt.UserRole, backup)
+            cloud_root.setExpanded(True)
+        
+        if not local_backups and not remote_backups:
+            self.backup_tree.addTopLevelItem(QTreeWidgetItem(["暂无任何备份文件"]))
 
     def restore_backup(self):
-        selected_index = self.backup_list.currentRow()
-        if selected_index < 0 or not self.backups_data:
-            QMessageBox.warning(self, "提示", "请先选择一个备份文件。")
+        selected_item = self.backup_tree.currentItem()
+        if not selected_item or not selected_item.data(0, Qt.UserRole):
+            QMessageBox.warning(self, "提示", "请先选择一个具体的备份文件。")
             return
             
-        backup_info = self.backups_data[selected_index]
-        
-        if backup_info['type'] == '快照线':
+        backup_info = selected_item.data(0, Qt.UserRole)
+        is_cloud = backup_info.get("source") == "cloud"
+
+        if is_cloud:
             reply = QMessageBox.question(self, "确认恢复",
-                                         f"您确定要从快照\n'{backup_info['file']}'\n恢复吗？\n"
-                                         "【注意】此操作将只恢复快照中包含的章节内容，\n"
-                                         "不会影响书籍、章节结构或其他数据。",
+                                         f"您确定要从【云端】恢复备份\n'{backup_info['file']}'\n吗？\n"
+                                         "这将首先从云端下载文件，然后覆盖本地数据。",
                                          QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                if self.backup_manager.restore_from_snapshot(backup_info):
-                    QMessageBox.information(self, "成功", "数据已从快照恢复。\n请检查相关章节内容。")
-                    self.parent().load_chapters_for_book(self.parent().current_book_id) # 刷新当前章节列表
-                    self.accept()
-                else:
-                    QMessageBox.critical(self, "失败", "恢复过程中发生错误。")
-        else: # 完整备份
+            if reply != QMessageBox.Yes:
+                return
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # [修改] remote_path 现在是完整路径，需要取文件名
+                remote_filename = os.path.basename(backup_info['path'])
+                downloaded_filepath = self.backup_manager.download_backup(remote_filename, temp_dir)
+                if not downloaded_filepath:
+                    QMessageBox.critical(self, "下载失败", "无法从云端下载备份文件，请检查网络和WebDAV设置。")
+                    return
+                
+                temp_backup_info = {
+                    "file": os.path.basename(downloaded_filepath),
+                    "dir": temp_dir,
+                    "type": backup_info['type']
+                }
+                self.proceed_with_restore(temp_backup_info)
+        else:
+            self.proceed_with_restore(backup_info)
+
+    def proceed_with_restore(self, backup_info):
+        backup_type_lower = backup_info.get('type', '').lower()
+        if 'snapshot' in backup_type_lower or '快照线' in backup_type_lower:
+            if self.backup_manager.restore_from_snapshot(backup_info):
+                QMessageBox.information(self, "成功", "数据已从快照恢复。\n请检查相关章节内容。")
+                if self.parent().current_book_id:
+                    self.parent().load_chapters_for_book(self.parent().current_book_id)
+                self.accept()
+            else:
+                QMessageBox.critical(self, "失败", "恢复过程中发生错误。")
+        else:
             reply = QMessageBox.warning(self, "确认恢复",
                                          f"您确定要从 {backup_info['type']} 备份\n'{backup_info['file']}'\n恢复吗？\n"
                                          "【警告】此操作将完全覆盖当前所有数据！\n"
@@ -91,18 +233,29 @@ class BackupDialog(QDialog):
                     QMessageBox.critical(self, "失败", "恢复过程中发生错误，请查看状态栏或控制台输出。")
 
     def delete_backup(self):
-        selected_index = self.backup_list.currentRow()
-        if selected_index < 0 or not self.backups_data:
-            QMessageBox.warning(self, "提示", "请先选择一个要删除的备份文件。")
+        selected_item = self.backup_tree.currentItem()
+        if not selected_item or not selected_item.data(0, Qt.UserRole):
+            QMessageBox.warning(self, "提示", "请先选择一个具体的备份文件。")
             return
 
-        backup_info = self.backups_data[selected_index]
+        backup_info = selected_item.data(0, Qt.UserRole)
+        is_cloud = backup_info.get("source") == "cloud"
+        source_text = "【云端】" if is_cloud else "【本地】"
+
         reply = QMessageBox.question(self, "确认删除",
-                                       f"确定要永久删除此 {backup_info['type']} 备份吗？\n'{backup_info['file']}'",
+                                       f"确定要永久删除此 {source_text} 备份吗？\n'{backup_info['file']}'",
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
-            if self.backup_manager.delete_backup(backup_info):
+            success = False
+            if is_cloud:
+                # [修改] 传递文件名而不是完整路径
+                remote_filename = os.path.basename(backup_info['path'])
+                success = self.backup_manager.delete_remote_backup(remote_filename)
+            else:
+                success = self.backup_manager.delete_backup(backup_info)
+            
+            if success:
                 QMessageBox.information(self, "成功", f"备份 '{backup_info['file']}' 已被删除。")
                 self.load_backups()
             else:
@@ -110,6 +263,7 @@ class BackupDialog(QDialog):
 
 
 class ManageGroupsDialog(QDialog):
+    # ... (此类的内部逻辑保持不变) ...
     def __init__(self, data_manager, parent=None):
         super().__init__(parent)
         self.data_manager = data_manager
@@ -189,8 +343,8 @@ class ManageGroupsDialog(QDialog):
             else:
                 QMessageBox.critical(self, "失败", "删除失败。")
 
-
 class EditBookDialog(QDialog):
+    # ... (此类的内部逻辑保持不变) ...
     def __init__(self, book_data, parent=None):
         super().__init__(parent)
         self.setWindowTitle("编辑书籍信息")
@@ -221,8 +375,8 @@ class EditBookDialog(QDialog):
             "group": self.group_edit.text()
         }
 
-
 class MainWindow(QMainWindow):
+    # ... (此类中除了 WebDAVSettingsDialog 和 BackupDialog 的调用外，其他逻辑保持不变) ...
     def __init__(self, data_manager, backup_manager, initial_theme):
         super().__init__()
         self.data_manager = data_manager
@@ -444,6 +598,10 @@ class MainWindow(QMainWindow):
         backup_manage_action.triggered.connect(self.open_backup_manager)
         backup_menu.addAction(backup_manage_action)
 
+        webdav_settings_action = QAction("WebDAV 设置", self)
+        webdav_settings_action.triggered.connect(self.open_webdav_settings)
+        backup_menu.addAction(webdav_settings_action)
+
         file_menu.addSeparator()
         exit_action = QAction("退出", self)
         exit_action.triggered.connect(self.close)
@@ -459,6 +617,9 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("视图")
         view_menu.addAction(self.toggle_theme_action)
 
+    def open_webdav_settings(self):
+        dialog = WebDAVSettingsDialog(self.data_manager, self)
+        dialog.exec()
 
     def update_theme(self, new_theme):
         self.data_manager.set_preference('theme', new_theme)
@@ -818,19 +979,42 @@ class MainWindow(QMainWindow):
 
     def setup_snapshot_timer(self):
         self.snapshot_timer = QTimer(self)
-        self.snapshot_timer.timeout.connect(self.backup_manager.create_snapshot_backup)
-        self.snapshot_timer.start(1 * 60 * 1000) # 1 minutes
-        self.show_status_message("快照线(Snapshot Line)增量备份已启动，每1分钟检查一次。")
+        self.snapshot_timer.timeout.connect(self.run_snapshot_backup)
+        self.update_timer_interval('snapshot_timer', 1 * 60 * 1000) # 1 minute default
+        self.show_status_message("快照线(Snapshot Line)增量备份已启动。")
 
     def setup_stage_point_timer(self):
         self.stage_point_timer = QTimer(self)
-        self.stage_point_timer.timeout.connect(self.backup_manager.create_stage_point_backup)
-        self.stage_point_timer.start(30 * 60 * 1000) # 30 minutes
-        self.show_status_message("阶段点(Stage Point)定时备份已启动，每30分钟执行一次。")
+        self.stage_point_timer.timeout.connect(self.run_stage_backup)
+        self.update_timer_interval('stage_point_timer', 30 * 60 * 1000) # 30 minutes default
+        self.show_status_message("阶段点(Stage Point)定时备份已启动。")
+
+    def update_timer_interval(self, timer_name, default_interval):
+        freq = self.data_manager.get_webdav_settings().get('webdav_sync_freq', '实时')
+        timer = getattr(self, timer_name)
+        if freq == '每小时':
+            timer.setInterval(60 * 60 * 1000)
+        elif freq == '仅启动时':
+            timer.stop()
+        else: # 实时
+            timer.setInterval(default_interval)
+            if not timer.isActive():
+                timer.start()
+
+    def run_snapshot_backup(self):
+        self.backup_manager.create_snapshot_backup()
+        self.update_timer_interval('snapshot_timer', 1 * 60 * 1000)
         
+    def run_stage_backup(self):
+        self.backup_manager.create_stage_point_backup()
+        self.update_timer_interval('stage_point_timer', 30 * 60 * 1000)
+
     def run_archive_backup(self):
         self.show_status_message("正在检查并创建日终归档备份...")
         self.backup_manager.create_archive_backup()
+        freq = self.data_manager.get_webdav_settings().get('webdav_sync_freq', '实时')
+        if freq == '仅启动时':
+            self.backup_manager.create_stage_point_backup() # Also trigger a stage backup on start
             
     def open_backup_manager(self):
         if self.is_text_changed: self.save_current_chapter()
