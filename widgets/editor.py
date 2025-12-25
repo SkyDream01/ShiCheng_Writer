@@ -1,12 +1,11 @@
 # ShiCheng_Writer/widgets/editor.py
 from PySide6.QtWidgets import QTextEdit, QApplication
-from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QColor, QFont
+from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, QFont, 
+                           QTextBlockFormat, QTextCursor)
 from PySide6.QtCore import QRegularExpression, Qt
 
-# vvvvvvvvvv [修改] 重命名为 MaterialHighlighter vvvvvvvvvv
 class MaterialHighlighter(QSyntaxHighlighter):
     """素材高亮器"""
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlighting_rules = []
@@ -16,30 +15,29 @@ class MaterialHighlighter(QSyntaxHighlighter):
 
     def update_highlight_color(self):
         palette = QApplication.instance().palette()
-        # A simple check for dark theme
+        # 简单的暗色主题检测
         is_dark_theme = palette.window().color().lightness() < 128
         
         if is_dark_theme:
-            self.highlight_format.setBackground(QColor("#015a9e"))
-            self.highlight_format.setForeground(QColor("#e0e0e0"))
+            # 暗色模式：深蓝背景，亮灰字，柔和护眼
+            self.highlight_format.setBackground(QColor("#1e3a5f"))
+            self.highlight_format.setForeground(QColor("#dcdcdc"))
         else: 
-            self.highlight_format.setBackground(QColor("#d9e9f7"))
-            self.highlight_format.setForeground(QColor("#000000"))
+            # 亮色模式：极淡蓝背景，深色字
+            self.highlight_format.setBackground(QColor("#e3f2fd"))
+            self.highlight_format.setForeground(QColor("#2c3e50"))
 
         self.highlight_format.setFontWeight(QFont.Bold)
-        # vvvvvvvvvv [修改] 更新提示文本 vvvvvvvvvv
         self.highlight_format.setToolTip("这是一个素材")
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.rehighlight()
 
-    # vvvvvvvvvv [修改] 重命名函数 vvvvvvvvvv
     def set_materials_list(self, materials_list):
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
         self.highlighting_rules = []
         if not materials_list:
             self.rehighlight()
             return
         
+        # 按长度降序排序，优先匹配长词
         sorted_list = sorted(materials_list, key=len, reverse=True)
 
         for material in sorted_list:
@@ -56,12 +54,18 @@ class MaterialHighlighter(QSyntaxHighlighter):
                 self.setFormat(match.capturedStart(), match.capturedLength(), format)
 
 class Editor(QTextEdit):
-    """自定义文本编辑器"""
+    """自定义文本编辑器 - 视觉优化版"""
     def __init__(self, parent=None):
         super().__init__(parent)
-        # vvvvvvvvvv [修改] 使用新的高亮器 vvvvvvvvvv
         self.highlighter = MaterialHighlighter(self.document())
-        # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        
+        # [优化] 设置文档边距，营造“纸张”感，防止文字紧贴窗口边缘
+        # 参数顺序: 左, 上, 右, 下
+        self.setViewportMargins(40, 20, 40, 20)
+        
+        # [优化] 加宽光标，在高分屏下更清晰
+        self.setCursorWidth(2)
+        
         self.set_font_size("16px") 
         
     def set_font_size(self, size_str):
@@ -69,12 +73,31 @@ class Editor(QTextEdit):
         try:
             size = int(size_str.replace('px', ''))
             font.setPointSize(size)
+            # [优化] 强制使用适合中文显示的字体
+            font.setFamily("Microsoft YaHei") 
             self.setFont(font)
+            
+            # [优化] 设置Tab宽度为4个空格
             self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
+            
+            # [优化] 初始化行间距 (150% 行高)
+            self.set_line_height(150)
+            
         except ValueError:
             print(f"无效的字体大小: {size_str}")
 
-
+    def set_line_height(self, percentage):
+        """设置行高百分比"""
+        block_fmt = QTextBlockFormat()
+        # 1 = ProportionalHeight (按比例设置行高)
+        block_fmt.setLineHeight(percentage, 1) 
+        
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.Document)
+        cursor.mergeBlockFormat(block_fmt)
+        cursor.clearSelection()
+        self.setTextCursor(cursor)
+        
     def auto_indent_document(self):
         self.setUpdatesEnabled(False)
         cursor = self.textCursor()
@@ -92,6 +115,8 @@ class Editor(QTextEdit):
         self.verticalScrollBar().setValue(scrollbar_pos)
         cursor.endEditBlock()
         self.setUpdatesEnabled(True)
+        # [修复] 重置全文后需重新应用行高
+        self.set_line_height(150)
 
     def auto_unindent_document(self):
         self.setUpdatesEnabled(False)
@@ -112,24 +137,35 @@ class Editor(QTextEdit):
         self.verticalScrollBar().setValue(scrollbar_pos)
         cursor.endEditBlock()
         self.setUpdatesEnabled(True)
+        # [修复] 重置全文后需重新应用行高
+        self.set_line_height(150)
 
-    # vvvvvvvvvv [修改] 更新高亮器函数 vvvvvvvvvv
     def update_highlighter(self, materials_list):
         """外部调用此方法来更新需要高亮的素材词汇"""
         self.highlighter.set_materials_list(materials_list)
         self.highlighter.update_highlight_color()
-    # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     def keyPressEvent(self, event):
         cursor = self.textCursor()
         
         if event.key() in [Qt.Key_Return, Qt.Key_Enter]:
             block_text = cursor.block().text()
+            # 处理列表项 (- 或 * 开头)
             if block_text.strip().startswith(("- ", "* ")):
                 super().keyPressEvent(event)
                 self.insertPlainText(block_text.split()[0] + " ")
                 return
+            
             super().keyPressEvent(event)
+            
+            # [优化] 确保新起的段落保持行高格式
+            current_fmt = cursor.blockFormat()
+            if current_fmt.lineHeight() != 150:
+                fmt = QTextBlockFormat()
+                fmt.setLineHeight(150, 1)
+                cursor.mergeBlockFormat(fmt)
+                
+            # 处理中文首行缩进
             prev_block = cursor.block().previous() 
             if prev_block.isValid() and prev_block.text().strip():
                  self.insertPlainText("　　")
