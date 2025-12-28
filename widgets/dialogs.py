@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QLabel, QLineEdit, QCheckBox, QComboBox, 
                                QDialogButtonBox, QPushButton, QMessageBox, 
                                QTreeWidget, QTreeWidgetItem, QHeaderView, 
-                               QListWidget, QInputDialog, QTextEdit)
+                               QListWidget, QInputDialog, QTextEdit, QApplication)
 from PySide6.QtCore import Qt
 
 class RecycleBinDialog(QDialog):
@@ -15,11 +15,11 @@ class RecycleBinDialog(QDialog):
         super().__init__(parent)
         self.data_manager = data_manager
         self.setWindowTitle("回收站")
-        self.resize(700, 450)
+        self.resize(750, 450) # 稍微加宽以容纳书籍名称
         
         layout = QVBoxLayout(self)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["名称", "类型", "删除时间", "原位置/ID"])
+        self.tree.setHeaderLabels(["名称", "类型", "删除时间", "所属书籍/原位置"])
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -55,9 +55,16 @@ class RecycleBinDialog(QDialog):
                 name = item_data.get('title', '未知')
                 type_str = "书籍" if item['item_type'] == 'book' else "章节"
                 
-                origin = ""
+                origin = "-"
                 if item['item_type'] == 'chapter':
-                    origin = f"BookID: {item_data.get('book_id')}"
+                    book_id = item_data.get('book_id')
+                    # [修改] 尝试获取书籍名称，提供更好的上下文
+                    if book_id:
+                        book_info = self.data_manager.get_book_details(book_id)
+                        if book_info:
+                            origin = f"《{book_info['title']}》"
+                        else:
+                            origin = f"<书籍已删除 ID:{book_id}>"
                 
                 tree_item = QTreeWidgetItem(self.tree)
                 tree_item.setText(0, name)
@@ -65,7 +72,8 @@ class RecycleBinDialog(QDialog):
                 tree_item.setText(2, item['deleted_at'])
                 tree_item.setText(3, origin)
                 tree_item.setData(0, Qt.UserRole, item['id']) # Recycle Bin ID
-            except Exception:
+            except Exception as e:
+                print(f"加载回收站项目失败: {e}")
                 continue
             
     def restore_item(self):
@@ -74,17 +82,22 @@ class RecycleBinDialog(QDialog):
         
         recycle_id = item.data(0, Qt.UserRole)
         res = self.data_manager.restore_recycle_item(recycle_id)
+        
         if res == True:
             QMessageBox.information(self, "成功", "项目已还原。")
             self.load_data()
-            if self.parent() and hasattr(self.parent(), 'load_books'):
-                self.parent().load_books()
-            if self.parent() and hasattr(self.parent(), 'current_book_id') and self.parent().current_book_id:
-                self.parent().load_chapters_for_book(self.parent().current_book_id)
+            # 刷新父窗口视图
+            parent = self.parent()
+            if parent:
+                if hasattr(parent, 'load_books'):
+                    parent.load_books()
+                if hasattr(parent, 'current_book_id') and parent.current_book_id:
+                    parent.load_chapters_for_book(parent.current_book_id)
+                    
         elif res == "parent_missing":
-             QMessageBox.warning(self, "无法还原", "该章节所属的书籍已不存在，无法直接还原。\n请先还原对应的书籍（如果也在回收站中）。")
+             QMessageBox.warning(self, "无法还原", "该章节所属的书籍已不存在，无法直接还原。\n请先检查回收站并还原对应的书籍。")
         else:
-            QMessageBox.warning(self, "失败", "还原失败。")
+            QMessageBox.warning(self, "失败", "还原失败，可能发生数据库错误。")
 
     def delete_item(self):
         item = self.tree.currentItem()
@@ -95,17 +108,23 @@ class RecycleBinDialog(QDialog):
             self.load_data()
             
     def empty_bin(self):
+        if self.tree.topLevelItemCount() == 0:
+            return
         if QMessageBox.question(self, "确认", "确定要清空回收站吗？所有项目将永久丢失。") == QMessageBox.Yes:
             self.data_manager.empty_recycle_bin()
             self.load_data()
 
 class WebDAVSettingsDialog(QDialog):
     """WebDAV 设置对话框"""
-    def __init__(self, data_manager, parent=None):
+    # [修改] 参数顺序调整以兼容旧代码调用 (parent=self)，同时允许可选传入 backup_manager
+    def __init__(self, data_manager, parent=None, backup_manager=None):
         super().__init__(parent)
         self.data_manager = data_manager
-        # 兼容处理
-        self.backup_manager = getattr(parent, 'backup_manager', None)
+        
+        # [修改] 优先使用传入的实例，否则尝试从 parent 获取 (兼容性处理)
+        self.backup_manager = backup_manager
+        if not self.backup_manager and hasattr(parent, 'backup_manager'):
+             self.backup_manager = parent.backup_manager
         
         self.setWindowTitle("WebDAV 设置")
         self.setMinimumSize(400, 300)
@@ -168,9 +187,10 @@ class WebDAVSettingsDialog(QDialog):
         
     def test_webdav_connection(self):
         if not self.backup_manager:
-            QMessageBox.warning(self, "错误", "无法获取备份管理器实例。")
+            QMessageBox.warning(self, "错误", "无法获取备份管理器实例，请检查程序初始化。")
             return
 
+        # 临时保存当前UI上的设置用于测试
         current_settings = {
             'webdav_enabled': self.enabled_check.isChecked(),
             'webdav_url': self.url_edit.text(),
@@ -184,15 +204,20 @@ class WebDAVSettingsDialog(QDialog):
         self.test_button.setEnabled(False)
         self.test_button.setText("测试中...")
         
-        success, message = self.backup_manager.test_webdav_connection()
-
-        if success:
-            QMessageBox.information(self, "连接成功", message)
-        else:
-            QMessageBox.critical(self, "连接失败", message)
-            
-        self.test_button.setEnabled(True)
-        self.test_button.setText("测试连接")
+        # 强制刷新UI以免卡顿感
+        QApplication.processEvents()
+        
+        try:
+            success, message = self.backup_manager.test_webdav_connection()
+            if success:
+                QMessageBox.information(self, "连接成功", message)
+            else:
+                QMessageBox.critical(self, "连接失败", message)
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"测试过程中发生异常: {str(e)}")
+        finally:
+            self.test_button.setEnabled(True)
+            self.test_button.setText("测试连接")
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
