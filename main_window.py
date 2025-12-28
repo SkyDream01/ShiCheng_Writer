@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QToolBar, QLabel, QMenu, QPushButton, QStatusBar, QToolButton,
                                QDialog, QDialogButtonBox, QApplication, QFormLayout, QLineEdit,
                                QTextEdit, QMenuBar, QTabWidget, QFrame, QComboBox, QCheckBox,
-                               QTreeWidget, QTreeWidgetItem, QHeaderView)
+                               QTreeWidget, QTreeWidgetItem, QHeaderView, QStackedWidget, QSizePolicy)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon
 # 引入 QThread 和 Signal 用于异步备份
 from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
@@ -23,8 +23,6 @@ from modules.timeline_system import TimelinePanel
 from modules.utils import resource_path
 from modules.backup import BackupManager
 from widgets.dialogs import WebDAVSettingsDialog, BackupDialog, ManageGroupsDialog, EditBookDialog
-
-# [修改] 移除了 MainWindow 内部冗余的 BackupWorker 定义
 
 class MainWindow(QMainWindow):
     def __init__(self, data_manager, backup_manager, initial_theme):
@@ -42,7 +40,7 @@ class MainWindow(QMainWindow):
 
         # 日志信号由主线程处理
         self.backup_manager.log_message.connect(self.show_status_message)
-        # [新增] 连接备份完成信号，显示最终状态
+        # 连接备份完成信号，显示最终状态
         self.backup_manager.backup_finished.connect(self.on_backup_finished)
 
         self.setup_ui()
@@ -54,7 +52,7 @@ class MainWindow(QMainWindow):
         self.setup_snapshot_timer()
         self.setup_stage_point_timer()
         
-        # [优化] 初始化时启动自动保存
+        # 初始化时启动自动保存
         self.setup_autosave()
         
         self.run_archive_backup()
@@ -166,6 +164,50 @@ class MainWindow(QMainWindow):
 
 
     def create_center_panel(self):
+        # [重构] 使用 QStackedWidget 管理多视图（书籍信息页 vs 编辑器页）
+        self.central_stack = QStackedWidget()
+        
+        # 1. 创建书籍信息展示页 (Index 0)
+        self.book_info_page = QWidget()
+        self.book_info_layout = QVBoxLayout(self.book_info_page)
+        self.book_info_layout.setAlignment(Qt.AlignTop)
+        self.book_info_layout.setContentsMargins(50, 50, 50, 50)
+        
+        # 书名
+        self.info_title_label = QLabel("请选择一本书")
+        self.info_title_label.setStyleSheet("font-size: 32px; font-weight: bold; margin-bottom: 10px;")
+        self.info_title_label.setWordWrap(True)
+        
+        # 分组与统计信息
+        self.info_meta_label = QLabel()
+        self.info_meta_label.setStyleSheet("color: #7f8c8d; font-size: 14px; margin-bottom: 30px;")
+        
+        # 分隔线
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setStyleSheet("color: #bdc3c7;")
+        
+        # 简介标题
+        desc_title = QLabel("内容简介")
+        desc_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-top: 20px; margin-bottom: 15px;")
+        
+        # 简介内容
+        self.info_desc_label = QLabel()
+        self.info_desc_label.setWordWrap(True)
+        self.info_desc_label.setStyleSheet("font-size: 16px; line-height: 1.6;")
+        self.info_desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        
+        self.book_info_layout.addWidget(self.info_title_label)
+        self.book_info_layout.addWidget(self.info_meta_label)
+        self.book_info_layout.addWidget(line)
+        self.book_info_layout.addWidget(desc_title)
+        self.book_info_layout.addWidget(self.info_desc_label)
+        self.book_info_layout.addStretch() # 底部弹簧
+
+        self.central_stack.addWidget(self.book_info_page)
+
+        # 2. 创建编辑器页 (Index 1)
         editor_container = QWidget()
         editor_layout = QVBoxLayout(editor_container)
         editor_layout.setContentsMargins(0, 0, 0, 0)
@@ -174,8 +216,9 @@ class MainWindow(QMainWindow):
         self.editor = Editor()
         
         editor_layout.addWidget(self.editor)
+        self.central_stack.addWidget(editor_container)
         
-        return editor_container
+        return self.central_stack
 
     def create_right_panel(self):
         self.right_tabs = QTabWidget()
@@ -367,10 +410,30 @@ class MainWindow(QMainWindow):
             self.add_chapter_toolbar_action.setEnabled(True)
             self.export_action.setEnabled(True)
             
-            self.editor.clear()
+            # [更新] 显示书籍信息页，而不是清空编辑器
+            book_details = self.data_manager.get_book_details(book_id)
+            if book_details:
+                self.info_title_label.setText(book_details['title'])
+                
+                # 获取章节数统计
+                chapters = self.data_manager.get_chapters_for_book(book_id)
+                chapter_count = len(chapters)
+                group = book_details.get('group', '未分组')
+                self.info_meta_label.setText(f"分组：{group}  |  当前章节数：{chapter_count}")
+                
+                desc = book_details.get('description', '')
+                if not desc:
+                    desc = "（暂无简介，右键点击左侧书籍标题可编辑信息）"
+                self.info_desc_label.setText(desc)
+            
+            # 切换到书籍信息视图
+            self.central_stack.setCurrentIndex(0)
+            
+            # 清理编辑器状态
             self.current_chapter_id = None
-            self.word_count_label.setText("字数: 0")
-            self.typing_speed_label.setText("速度: 0 字/分")
+            self.editor.clear()
+            self.word_count_label.setText("字数: -")
+            self.typing_speed_label.setText("速度: -")
 
     def open_book_menu(self, position):
         index = self.book_tree.indexAt(position)
@@ -428,6 +491,16 @@ class MainWindow(QMainWindow):
             new_details = dialog.get_details()
             self.data_manager.update_book(book_id, **new_details)
             self.load_books()
+            
+            # [新增] 如果当前正在查看这本书的信息，实时刷新页面
+            if self.current_book_id == book_id and self.central_stack.currentIndex() == 0:
+                self.info_title_label.setText(new_details['title'])
+                group = new_details.get('group', '未分组')
+                # 重新获取章节数以保持准确
+                chapters = self.data_manager.get_chapters_for_book(book_id)
+                self.info_meta_label.setText(f"分组：{group}  |  当前章节数：{len(chapters)}")
+                self.info_desc_label.setText(new_details.get('description', ''))
+                
             self.statusBar().showMessage(f"书籍《{new_details['title']}》信息已更新。", 3000)
 
     def delete_book(self, book_id):
@@ -445,6 +518,12 @@ class MainWindow(QMainWindow):
                 self.add_chapter_action.setEnabled(False)
                 self.add_chapter_toolbar_action.setEnabled(False)
                 self.export_action.setEnabled(False)
+                # 也可以切换到一个空白页或保留当前页
+                self.info_title_label.setText("请选择一本书")
+                self.info_meta_label.setText("")
+                self.info_desc_label.setText("")
+                self.central_stack.setCurrentIndex(0)
+
             self.statusBar().showMessage(f"书籍《{book_details['title']}》已移入回收站。", 3000)
             
     def set_book_group(self, book_id):
@@ -467,7 +546,7 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 chapters = self.data_manager.get_chapters_for_book(book_id)
-                # [优化] 使用 utf-8-sig 编码，兼容 Windows 记事本
+                # 使用 utf-8-sig 编码，兼容 Windows 记事本
                 with open(file_path, 'w', encoding='utf-8-sig') as f:
                     f.write(f"书名：{book_details['title']}\n")
                     f.write(f"描述：{book_details.get('description', '')}\n")
@@ -516,6 +595,9 @@ class MainWindow(QMainWindow):
                 self.find_and_select_chapter(self.current_chapter_id, force_select=True)
                 return
         
+        # [更新] 切换到编辑器视图
+        self.central_stack.setCurrentIndex(1)
+        
         self.current_chapter_id = chapter_id
         content, count = self.data_manager.get_chapter_content(chapter_id)
         self.editor.blockSignals(True)
@@ -561,6 +643,9 @@ class MainWindow(QMainWindow):
             if self.current_chapter_id == chapter_id:
                 self.current_chapter_id = None
                 self.editor.clear()
+                # 章节删除后，如果没选中其他章节，可以切回书籍信息页
+                self.central_stack.setCurrentIndex(0)
+                
             self.statusBar().showMessage(f"章节《{chapter_details['title']}》已删除。", 3000)
 
     def rename_volume(self, old_volume_name):
@@ -685,14 +770,14 @@ class MainWindow(QMainWindow):
         if manual:
              self.show_status_message("正在后台执行手动备份...")
         
-        # [修改] 直接调用 BackupManager，其内部已封装线程
+        # 直接调用 BackupManager，其内部已封装线程
         self.backup_manager.create_stage_point_backup()
         
         self.update_timer_interval('stage_point_timer', 30 * 60 * 1000)
 
     def run_archive_backup(self):
         self.show_status_message("正在后台检查并创建日终归档备份...")
-        # [修改] 直接调用
+        # 直接调用
         self.backup_manager.create_archive_backup()
     
     def on_backup_finished(self, success, message):
