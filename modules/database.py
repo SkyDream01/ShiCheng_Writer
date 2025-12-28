@@ -5,8 +5,10 @@ import json
 from datetime import datetime
 import threading
 import hashlib
+from .utils import get_app_root  # [新增] 导入路径工具
 
-DB_FILE = "ShiCheng_Writer.db"
+# [修改] 使用绝对路径，确保在 exe 环境下多线程或 CWD 改变时仍能找到数据库
+DB_FILE = os.path.join(get_app_root(), "ShiCheng_Writer.db")
 
 # 辅助函数：计算稳定的哈希值
 def calculate_hash(content):

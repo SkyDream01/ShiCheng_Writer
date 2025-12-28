@@ -1,5 +1,6 @@
 # ShiCheng_Writer/main.py
 import sys
+import os # [新增]
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QCoreApplication, Qt
 
@@ -7,7 +8,8 @@ from PySide6.QtCore import QCoreApplication, Qt
 from modules.database import initialize_database, DataManager
 from modules.backup import BackupManager
 from modules.theme_manager import set_stylesheet
-from modules.utils import resource_path # [修改] 从 utils 导入
+# [修改] 导入 get_app_root
+from modules.utils import resource_path, get_app_root 
 
 def main():
     # 将 MainWindow 的导入移至函数内部，确保所有依赖都已加载
@@ -20,7 +22,10 @@ def main():
     data_manager = DataManager()
 
     # 3. 创建备份管理器实例, 并传入 data_manager
-    backup_manager = BackupManager(data_manager)
+    # [修改] 计算绝对路径的 backups 目录，防止因工作目录变化导致备份位置错误
+    backup_dir = os.path.join(get_app_root(), "backups")
+    # 显式传入 base_backup_dir
+    backup_manager = BackupManager(data_manager, base_backup_dir=backup_dir)
 
     # 4. 启动Qt应用
     app = QApplication(sys.argv)
