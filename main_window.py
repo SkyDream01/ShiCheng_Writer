@@ -11,7 +11,8 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QTextEdit, QMenuBar, QTabWidget, QFrame, QComboBox, QCheckBox,
                                QTreeWidget, QTreeWidgetItem, QHeaderView)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon
-from PySide6.QtCore import Qt, QSize, QTimer
+# 引入 QThread 和 Signal 用于异步备份
+from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
 
 from modules.theme_manager import set_stylesheet
 from modules.database import DataManager
@@ -21,8 +22,9 @@ from modules.inspiration import InspirationPanel
 from modules.timeline_system import TimelinePanel
 from modules.utils import resource_path
 from modules.backup import BackupManager
-# [优化] 导入新分离的对话框
 from widgets.dialogs import WebDAVSettingsDialog, BackupDialog, ManageGroupsDialog, EditBookDialog
+
+# [修改] 移除了 MainWindow 内部冗余的 BackupWorker 定义
 
 class MainWindow(QMainWindow):
     def __init__(self, data_manager, backup_manager, initial_theme):
@@ -38,7 +40,10 @@ class MainWindow(QMainWindow):
         self.setGeometry(100, 100, 1400, 900)
         self.setWindowIcon(QIcon(resource_path('resources/icons/logo.png')))
 
+        # 日志信号由主线程处理
         self.backup_manager.log_message.connect(self.show_status_message)
+        # [新增] 连接备份完成信号，显示最终状态
+        self.backup_manager.backup_finished.connect(self.on_backup_finished)
 
         self.setup_ui()
         self.setup_actions()
@@ -48,6 +53,10 @@ class MainWindow(QMainWindow):
         self.load_books()
         self.setup_snapshot_timer()
         self.setup_stage_point_timer()
+        
+        # [优化] 初始化时启动自动保存
+        self.setup_autosave()
+        
         self.run_archive_backup()
 
         self.typing_timer = QTimer(self)
@@ -238,8 +247,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(group_manage_action)
 
         backup_menu = file_menu.addMenu("备份")
-        backup_now_action = QAction("立即备份", self)
-        backup_now_action.triggered.connect(self.backup_manager.create_stage_point_backup)
+        # 立即备份走线程
+        backup_now_action = QAction("立即备份 (阶段点)", self)
+        backup_now_action.triggered.connect(lambda: self.run_stage_backup(manual=True))
         backup_menu.addAction(backup_now_action)
 
         backup_manage_action = QAction("备份管理", self)
@@ -373,7 +383,9 @@ class MainWindow(QMainWindow):
         set_group_action = menu.addAction("设置分组")
         export_action = menu.addAction("导出为 TXT")
         delete_action = menu.addAction("删除书籍")
-        action = menu.exec_(self.book_tree.viewport().mapToGlobal(position))
+        
+        action = menu.exec(self.book_tree.viewport().mapToGlobal(position))
+        
         if action == edit_action: self.edit_book(book_id)
         elif action == delete_action: self.delete_book(book_id)
         elif action == set_group_action: self.set_book_group(book_id)
@@ -390,7 +402,9 @@ class MainWindow(QMainWindow):
             delete_chapter_action = menu.addAction("删除章节")
         else: # Is a volume
             rename_volume_action = menu.addAction("重命名卷")
-        action = menu.exec_(self.chapter_tree.viewport().mapToGlobal(position))
+        
+        action = menu.exec(self.chapter_tree.viewport().mapToGlobal(position))
+        
         if isinstance(data, int):
             if action == rename_chapter_action: self.rename_chapter(data)
             elif action == delete_chapter_action: self.delete_chapter(data)
@@ -453,7 +467,8 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 chapters = self.data_manager.get_chapters_for_book(book_id)
-                with open(file_path, 'w', encoding='utf-8') as f:
+                # [优化] 使用 utf-8-sig 编码，兼容 Windows 记事本
+                with open(file_path, 'w', encoding='utf-8-sig') as f:
                     f.write(f"书名：{book_details['title']}\n")
                     f.write(f"描述：{book_details.get('description', '')}\n")
                     f.write("="*20 + "\n\n")
@@ -577,11 +592,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"章节已保存！", 2000)
             return True
         elif not self.is_text_changed and self.current_chapter_id:
-            self.statusBar().showMessage(f"内容未修改，无需保存。", 2000)
-        elif not self.current_chapter_id:
-            self.statusBar().showMessage(f"当前没有打开的章节可供保存。", 2000)
+            # 自动保存时静默处理，只有手动保存提示
+            pass
         return False
-        
+            
     def refresh_editor_highlighter(self):
         if self.current_book_id:
             materials_names = self.data_manager.get_all_materials_names(self.current_book_id)
@@ -618,6 +632,7 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
 
+        # 关闭时的备份保持同步执行，确保数据安全
         self.show_status_message("正在执行关闭前的阶段点备份...")
         self.backup_manager.create_stage_point_backup()
 
@@ -636,6 +651,18 @@ class MainWindow(QMainWindow):
         self.stage_point_timer.timeout.connect(self.run_stage_backup)
         self.update_timer_interval('stage_point_timer', 30 * 60 * 1000) 
         self.show_status_message("阶段点(Stage Point)定时备份已启动。")
+        
+    def setup_autosave(self):
+        # 自动保存定时器，每60秒检查一次
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.setInterval(60000) 
+        self.autosave_timer.timeout.connect(self.auto_save_check)
+        self.autosave_timer.start()
+
+    def auto_save_check(self):
+        if self.current_chapter_id and self.is_text_changed:
+            self.save_current_chapter()
+            self.statusBar().showMessage("系统已自动保存草稿", 2000)
 
     def update_timer_interval(self, timer_name, default_interval):
         freq = self.data_manager.get_webdav_settings().get('webdav_sync_freq', '实时')
@@ -650,20 +677,27 @@ class MainWindow(QMainWindow):
                 timer.start()
 
     def run_snapshot_backup(self):
+        # 快照备份轻量级，依然走同步，或者也可以改为异步
         self.backup_manager.create_snapshot_backup()
         self.update_timer_interval('snapshot_timer', 1 * 60 * 1000)
         
-    def run_stage_backup(self):
+    def run_stage_backup(self, manual=False):
+        if manual:
+             self.show_status_message("正在后台执行手动备份...")
+        
+        # [修改] 直接调用 BackupManager，其内部已封装线程
         self.backup_manager.create_stage_point_backup()
+        
         self.update_timer_interval('stage_point_timer', 30 * 60 * 1000)
 
     def run_archive_backup(self):
-        self.show_status_message("正在检查并创建日终归档备份...")
+        self.show_status_message("正在后台检查并创建日终归档备份...")
+        # [修改] 直接调用
         self.backup_manager.create_archive_backup()
-        freq = self.data_manager.get_webdav_settings().get('webdav_sync_freq', '实时')
-        if freq == '仅启动时':
-            self.backup_manager.create_stage_point_backup()
-            
+    
+    def on_backup_finished(self, success, message):
+        self.show_status_message(message)
+
     def open_backup_manager(self):
         if self.is_text_changed: self.save_current_chapter()
         dialog = BackupDialog(self.backup_manager, self)

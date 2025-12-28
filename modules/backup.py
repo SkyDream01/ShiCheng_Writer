@@ -8,12 +8,11 @@ from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QThread
 
 from .webdav_client import WebDAVClient
-# [优化] 引入 DataManager 类以便在线程中新建连接
 from .database import DataManager
 
 class BackupWorker(QThread):
     """
-    [优化] 后台备份工作线程
+    后台备份工作线程
     """
     finished = Signal(bool, str) # success, message
     log = Signal(str)
@@ -25,7 +24,7 @@ class BackupWorker(QThread):
         self.snapshot_data = None # 仅用于 snapshot
 
     def run(self):
-        # [优化] 在线程内部实例化 DataManager，确保数据库连接线程安全
+        # 在线程内部实例化 DataManager，确保数据库连接线程安全
         local_data_manager = DataManager()
         
         try:
@@ -206,9 +205,11 @@ class BackupWorker(QThread):
 
 class BackupManager(QObject):
     """
-    [优化] 备份管理器，作为前端和后台线程的桥梁
+    备份管理器，作为前端和后台线程的桥梁
     """
     log_message = Signal(str)
+    # [新增] 备份完成信号，用于通知 UI 更新状态
+    backup_finished = Signal(bool, str)
 
     def __init__(self, data_manager, base_backup_dir="backups"):
         super().__init__()
@@ -239,8 +240,12 @@ class BackupManager(QObject):
         self._current_worker.start()
 
     def _on_worker_finished(self, success, message):
+        # [修改] 无论成功失败，都将结果转发给 backup_finished 信号
+        self.backup_finished.emit(success, message)
+        
         if not success:
             self.log_message.emit(f"备份任务结束: {message}")
+        
         self._cleanup_local_backups()
 
     def create_stage_point_backup(self):

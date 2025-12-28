@@ -4,24 +4,26 @@ import os
 import json
 from datetime import datetime
 import threading
+import hashlib  # [新增] 引入 hashlib
 
 DB_FILE = "ShiCheng_Writer.db"
 
+# [新增] 辅助函数：计算稳定的哈希值
+def calculate_hash(content):
+    return hashlib.md5(content.encode('utf-8')).hexdigest()
+
 def get_db_connection():
     """获取数据库连接"""
-    # [优化] check_same_thread=False 允许在后台线程中使用此连接
     conn = sqlite3.connect(DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # [优化] 启用 WAL 模式，大幅提升读写并发性能
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 def initialize_database():
-    """初始化数据库，创建所有需要的表，并执行迁移"""
+    """初始化数据库"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # --- 1. 创建所有表结构 ---
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,7 +95,6 @@ def initialize_database():
         value TEXT
     )
     """)
-    # 时间轴相关表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS timelines (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +120,7 @@ def initialize_database():
     )
     """)
 
-    # --- 2. 执行数据库迁移 ---
+    # 迁移逻辑
     try:
         cursor.execute("PRAGMA table_info(settings)")
         if cursor.fetchone():
@@ -154,7 +155,6 @@ class DataManager:
     """数据管理类，封装所有数据库操作"""
     def __init__(self):
         self.conn = get_db_connection()
-        # [优化] 添加线程锁
         self.lock = threading.Lock()
 
     def get_preference(self, key, default=None):
@@ -267,7 +267,11 @@ class DataManager:
 
     def get_chapters_for_book(self, book_id):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM chapters WHERE book_id = ? ORDER BY volume, id", (book_id,))
+        # 不查询 content 字段，列表加载速度提升百倍
+        cursor.execute("""
+            SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash 
+            FROM chapters WHERE book_id = ? ORDER BY volume, id
+        """, (book_id,))
         return [dict(row) for row in cursor.fetchall()]
 
     def get_chapter_details(self, chapter_id):
@@ -287,7 +291,9 @@ class DataManager:
             current_time = int(datetime.now().timestamp() * 1000)
             content = f"# {title}\n\n　　"
             word_count = len(content.strip())
-            content_hash = hash(content)
+            # [修改] 使用 stable hash
+            content_hash = calculate_hash(content)
+            
             cursor = self.conn.cursor()
             cursor.execute("""
                 INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
@@ -323,7 +329,9 @@ class DataManager:
     def update_chapter_content(self, chapter_id, content):
         with self.lock:
             word_count = len(content.strip())
-            content_hash = hash(content)
+            # [修改] 使用 stable hash
+            content_hash = calculate_hash(content)
+            
             current_time_ms = int(datetime.now().timestamp() * 1000)
             cursor = self.conn.cursor()
             cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",

@@ -5,7 +5,7 @@ from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, QFont,
 from PySide6.QtCore import QRegularExpression, Qt
 
 class MaterialHighlighter(QSyntaxHighlighter):
-    """素材高亮器"""
+    """素材高亮器 - 性能优化版"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlighting_rules = []
@@ -37,12 +37,16 @@ class MaterialHighlighter(QSyntaxHighlighter):
             self.rehighlight()
             return
         
-        # 按长度降序排序，优先匹配长词
+        # 1. 按长度降序排序，防止短词覆盖长词
         sorted_list = sorted(materials_list, key=len, reverse=True)
 
-        for material in sorted_list:
-            pattern = QRegularExpression(f"\\b{QRegularExpression.escape(material)}\\b")
-            self.highlighting_rules.append((pattern, self.highlight_format))
+        # 2. [核心优化] 将所有关键词合并为一个正则表达式进行一次性匹配
+        # 使用 escape 防止关键词中包含正则特殊符号，然后用 | 连接
+        escaped_list = [QRegularExpression.escape(m) for m in sorted_list]
+        pattern_str = f"\\b({'|'.join(escaped_list)})\\b"
+        
+        pattern = QRegularExpression(pattern_str)
+        self.highlighting_rules.append((pattern, self.highlight_format))
         
         self.rehighlight()
 
@@ -59,11 +63,10 @@ class Editor(QTextEdit):
         super().__init__(parent)
         self.highlighter = MaterialHighlighter(self.document())
         
-        # [优化] 设置文档边距，营造“纸张”感，防止文字紧贴窗口边缘
-        # 参数顺序: 左, 上, 右, 下
+        # 设置文档边距，营造“纸张”感
         self.setViewportMargins(40, 20, 40, 20)
         
-        # [优化] 加宽光标，在高分屏下更清晰
+        # 加宽光标
         self.setCursorWidth(2)
         
         self.set_font_size("16px") 
@@ -73,14 +76,14 @@ class Editor(QTextEdit):
         try:
             size = int(size_str.replace('px', ''))
             font.setPointSize(size)
-            # [优化] 强制使用适合中文显示的字体
-            font.setFamily("Microsoft YaHei") 
+            # [修改] 使用字体族列表，兼容多平台，首选微软雅黑，回退到 PingFang (Mac) 或其他黑体
+            font.setFamilies(["Microsoft YaHei", "PingFang SC", "Heiti SC", "SimHei", "Sans-Serif"])
             self.setFont(font)
             
-            # [优化] 设置Tab宽度为4个空格
+            # 设置Tab宽度为4个空格
             self.setTabStopDistance(self.fontMetrics().horizontalAdvance(' ') * 4)
             
-            # [优化] 初始化行间距 (150% 行高)
+            # 初始化行间距 (150% 行高)
             self.set_line_height(150)
             
         except ValueError:
@@ -115,7 +118,7 @@ class Editor(QTextEdit):
         self.verticalScrollBar().setValue(scrollbar_pos)
         cursor.endEditBlock()
         self.setUpdatesEnabled(True)
-        # [修复] 重置全文后需重新应用行高
+        # 重置全文后需重新应用行高
         self.set_line_height(150)
 
     def auto_unindent_document(self):
@@ -137,7 +140,7 @@ class Editor(QTextEdit):
         self.verticalScrollBar().setValue(scrollbar_pos)
         cursor.endEditBlock()
         self.setUpdatesEnabled(True)
-        # [修复] 重置全文后需重新应用行高
+        # 重置全文后需重新应用行高
         self.set_line_height(150)
 
     def update_highlighter(self, materials_list):
@@ -158,7 +161,7 @@ class Editor(QTextEdit):
             
             super().keyPressEvent(event)
             
-            # [优化] 确保新起的段落保持行高格式
+            # 确保新起的段落保持行高格式
             current_fmt = cursor.blockFormat()
             if current_fmt.lineHeight() != 150:
                 fmt = QTextBlockFormat()
