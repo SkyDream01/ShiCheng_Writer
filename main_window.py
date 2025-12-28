@@ -22,7 +22,8 @@ from modules.inspiration import InspirationPanel
 from modules.timeline_system import TimelinePanel
 from modules.utils import resource_path
 from modules.backup import BackupManager
-from widgets.dialogs import WebDAVSettingsDialog, BackupDialog, ManageGroupsDialog, EditBookDialog
+# [修改] 导入 RecycleBinDialog
+from widgets.dialogs import WebDAVSettingsDialog, BackupDialog, ManageGroupsDialog, EditBookDialog, RecycleBinDialog
 
 class MainWindow(QMainWindow):
     def __init__(self, data_manager, backup_manager, initial_theme):
@@ -164,57 +165,82 @@ class MainWindow(QMainWindow):
 
 
     def create_center_panel(self):
-        # [重构] 使用 QStackedWidget 管理多视图（书籍信息页 vs 编辑器页）
         self.central_stack = QStackedWidget()
         
-        # 1. 创建书籍信息展示页 (Index 0)
+        # --- 1. 书籍信息展示页 (UI优化：无缝沉浸式) ---
         self.book_info_page = QWidget()
-        self.book_info_layout = QVBoxLayout(self.book_info_page)
-        self.book_info_layout.setAlignment(Qt.AlignTop)
-        self.book_info_layout.setContentsMargins(50, 50, 50, 50)
+        self.book_info_page.setObjectName("BookInfoPage")
         
+        # 整体布局：垂直方向居中
+        main_layout = QVBoxLayout(self.book_info_page)
+        # [调整] 增加左右边距，使文字在大屏幕上不会太散
+        main_layout.setContentsMargins(80, 60, 80, 60) 
+        
+        # 信息容器 (用于控制内容宽度，但视觉上透明)
+        info_container = QFrame()
+        info_container.setObjectName("InfoContainer") # 改名为 Container，强调它只是容器
+        
+        container_layout = QVBoxLayout(info_container)
+        container_layout.setContentsMargins(0, 0, 0, 0) # 内部无边距，靠外层控制
+        container_layout.setSpacing(20) # 元素间距宽松
+
         # 书名
         self.info_title_label = QLabel("请选择一本书")
-        self.info_title_label.setStyleSheet("font-size: 32px; font-weight: bold; margin-bottom: 10px;")
+        self.info_title_label.setObjectName("InfoTitle")
+        self.info_title_label.setAlignment(Qt.AlignCenter)
         self.info_title_label.setWordWrap(True)
         
         # 分组与统计信息
-        self.info_meta_label = QLabel()
-        self.info_meta_label.setStyleSheet("color: #7f8c8d; font-size: 14px; margin-bottom: 30px;")
+        self.info_meta_label = QLabel("开始您的创作之旅")
+        self.info_meta_label.setObjectName("InfoMeta")
+        self.info_meta_label.setAlignment(Qt.AlignCenter)
         
-        # 分隔线
+        # 装饰性分割线 (极简短横线)
+        line_container = QHBoxLayout() # 用于居中短横线
+        line_container.addStretch()
         line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        line.setStyleSheet("color: #bdc3c7;")
+        line.setObjectName("InfoLine")
+        line.setFixedWidth(60) # [调整] 只显示中间一小段，精致不突兀
+        line.setFixedHeight(2)
+        line_container.addWidget(line)
+        line_container.addStretch()
         
         # 简介标题
         desc_title = QLabel("内容简介")
-        desc_title.setStyleSheet("font-size: 18px; font-weight: bold; margin-top: 20px; margin-bottom: 15px;")
+        desc_title.setObjectName("InfoDescTitle")
+        desc_title.setAlignment(Qt.AlignCenter) # [调整] 标题居中
         
         # 简介内容
         self.info_desc_label = QLabel()
+        self.info_desc_label.setObjectName("InfoDesc")
         self.info_desc_label.setWordWrap(True)
-        self.info_desc_label.setStyleSheet("font-size: 16px; line-height: 1.6;")
         self.info_desc_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.info_desc_label.setAlignment(Qt.AlignTop | Qt.AlignLeft) # 正文左对齐
+        # [调整] 给简介文字一点行间距和内部填充
         
-        self.book_info_layout.addWidget(self.info_title_label)
-        self.book_info_layout.addWidget(self.info_meta_label)
-        self.book_info_layout.addWidget(line)
-        self.book_info_layout.addWidget(desc_title)
-        self.book_info_layout.addWidget(self.info_desc_label)
-        self.book_info_layout.addStretch() # 底部弹簧
+        # 组装
+        container_layout.addWidget(self.info_title_label)
+        container_layout.addWidget(self.info_meta_label)
+        container_layout.addSpacing(10)
+        container_layout.addLayout(line_container)
+        container_layout.addSpacing(30)
+        container_layout.addWidget(desc_title)
+        container_layout.addWidget(self.info_desc_label)
+        container_layout.addStretch()
+
+        # 页面垂直居中
+        main_layout.addStretch(1)
+        main_layout.addWidget(info_container)
+        main_layout.addStretch(2) # 下方留白更多，视觉重心偏上
 
         self.central_stack.addWidget(self.book_info_page)
 
-        # 2. 创建编辑器页 (Index 1)
+        # --- 2. 编辑器页 ---
         editor_container = QWidget()
         editor_layout = QVBoxLayout(editor_container)
         editor_layout.setContentsMargins(0, 0, 0, 0)
-        editor_layout.setSpacing(0)
-
-        self.editor = Editor()
         
+        self.editor = Editor()
         editor_layout.addWidget(self.editor)
         self.central_stack.addWidget(editor_container)
         
@@ -288,6 +314,11 @@ class MainWindow(QMainWindow):
         group_manage_action = QAction("分组管理", self)
         group_manage_action.triggered.connect(self.open_group_manager)
         file_menu.addAction(group_manage_action)
+        
+        # [新增] 回收站菜单
+        recycle_bin_action = QAction("回收站", self)
+        recycle_bin_action.triggered.connect(self.open_recycle_bin)
+        file_menu.addAction(recycle_bin_action)
 
         backup_menu = file_menu.addMenu("备份")
         # 立即备份走线程
@@ -320,6 +351,11 @@ class MainWindow(QMainWindow):
 
     def open_webdav_settings(self):
         dialog = WebDAVSettingsDialog(self.data_manager, self)
+        dialog.exec()
+    
+    # [新增] 打开回收站
+    def open_recycle_bin(self):
+        dialog = RecycleBinDialog(self.data_manager, self)
         dialog.exec()
 
     def update_theme(self, new_theme):
@@ -405,7 +441,7 @@ class MainWindow(QMainWindow):
             self.inspiration_panel.refresh_all()
             self.timeline_panel.set_book(book_id)
             self.refresh_editor_highlighter()
-            self.setWindowTitle(f"诗成写作 - {item.text()}")
+            self.setWindowTitle(f"诗成写作 PC版 - {item.text()}")
             self.add_chapter_action.setEnabled(True)
             self.add_chapter_toolbar_action.setEnabled(True)
             self.export_action.setEnabled(True)
@@ -504,7 +540,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"书籍《{new_details['title']}》信息已更新。", 3000)
 
     def delete_book(self, book_id):
-        reply = QMessageBox.question(self, '确认删除', "确定要删除这本书吗？\n该操作会将其移入回收站。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        # [修改] 提示语更新，告知用户进入回收站
+        reply = QMessageBox.question(self, '确认删除', "确定要删除这本书吗？\n该操作会将其移入回收站，您可以在“文件 > 回收站”中恢复。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             book_details = self.data_manager.get_book_details(book_id)
             self.data_manager.delete_book(book_id)
@@ -635,7 +672,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"章节已重命名为《{new_title}》", 3000)
 
     def delete_chapter(self, chapter_id):
-        reply = QMessageBox.question(self, '确认删除', "确定要删除这个章节吗？\n该操作无法撤销。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        # [修改] 提示语更新
+        reply = QMessageBox.question(self, '确认删除', "确定要删除这个章节吗？\n该操作会将其移入回收站，您可以在“文件 > 回收站”中恢复。", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             chapter_details = self.data_manager.get_chapter_details(chapter_id)
             self.data_manager.delete_chapter(chapter_id)
@@ -646,7 +684,7 @@ class MainWindow(QMainWindow):
                 # 章节删除后，如果没选中其他章节，可以切回书籍信息页
                 self.central_stack.setCurrentIndex(0)
                 
-            self.statusBar().showMessage(f"章节《{chapter_details['title']}》已删除。", 3000)
+            self.statusBar().showMessage(f"章节《{chapter_details['title']}》已移入回收站。", 3000)
 
     def rename_volume(self, old_volume_name):
         new_volume_name, ok = QInputDialog.getText(self, "重命名卷", "请输入新的卷名:", text=old_volume_name)

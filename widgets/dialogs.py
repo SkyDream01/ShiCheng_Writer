@@ -1,12 +1,103 @@
 # ShiCheng_Writer/widgets/dialogs.py
 import os
 import tempfile
+import json
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QLabel, QLineEdit, QCheckBox, QComboBox, 
                                QDialogButtonBox, QPushButton, QMessageBox, 
                                QTreeWidget, QTreeWidgetItem, QHeaderView, 
                                QListWidget, QInputDialog, QTextEdit)
 from PySide6.QtCore import Qt
+
+class RecycleBinDialog(QDialog):
+    """[新增] 回收站管理对话框"""
+    def __init__(self, data_manager, parent=None):
+        super().__init__(parent)
+        self.data_manager = data_manager
+        self.setWindowTitle("回收站")
+        self.resize(700, 450)
+        
+        layout = QVBoxLayout(self)
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["名称", "类型", "删除时间", "原位置/ID"])
+        self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        layout.addWidget(self.tree)
+        
+        btn_layout = QHBoxLayout()
+        self.restore_btn = QPushButton("还原")
+        self.restore_btn.clicked.connect(self.restore_item)
+        self.del_btn = QPushButton("彻底删除")
+        self.del_btn.setStyleSheet("background-color: #e74c3c; color: white;")
+        self.del_btn.clicked.connect(self.delete_item)
+        self.empty_btn = QPushButton("清空回收站")
+        self.empty_btn.clicked.connect(self.empty_bin)
+        
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        
+        btn_layout.addWidget(self.restore_btn)
+        btn_layout.addWidget(self.del_btn)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.empty_btn)
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+        
+        self.load_data()
+        
+    def load_data(self):
+        self.tree.clear()
+        items = self.data_manager.get_recycle_bin_items()
+        for item in items:
+            try:
+                item_data = json.loads(item['item_data'])
+                name = item_data.get('title', '未知')
+                type_str = "书籍" if item['item_type'] == 'book' else "章节"
+                
+                origin = ""
+                if item['item_type'] == 'chapter':
+                    origin = f"BookID: {item_data.get('book_id')}"
+                
+                tree_item = QTreeWidgetItem(self.tree)
+                tree_item.setText(0, name)
+                tree_item.setText(1, type_str)
+                tree_item.setText(2, item['deleted_at'])
+                tree_item.setText(3, origin)
+                tree_item.setData(0, Qt.UserRole, item['id']) # Recycle Bin ID
+            except Exception:
+                continue
+            
+    def restore_item(self):
+        item = self.tree.currentItem()
+        if not item: return
+        
+        recycle_id = item.data(0, Qt.UserRole)
+        res = self.data_manager.restore_recycle_item(recycle_id)
+        if res == True:
+            QMessageBox.information(self, "成功", "项目已还原。")
+            self.load_data()
+            if self.parent() and hasattr(self.parent(), 'load_books'):
+                self.parent().load_books()
+            if self.parent() and hasattr(self.parent(), 'current_book_id') and self.parent().current_book_id:
+                self.parent().load_chapters_for_book(self.parent().current_book_id)
+        elif res == "parent_missing":
+             QMessageBox.warning(self, "无法还原", "该章节所属的书籍已不存在，无法直接还原。\n请先还原对应的书籍（如果也在回收站中）。")
+        else:
+            QMessageBox.warning(self, "失败", "还原失败。")
+
+    def delete_item(self):
+        item = self.tree.currentItem()
+        if not item: return
+        if QMessageBox.question(self, "确认", "确定要彻底删除该项目吗？此操作无法撤销。") == QMessageBox.Yes:
+            recycle_id = item.data(0, Qt.UserRole)
+            self.data_manager.delete_recycle_item(recycle_id)
+            self.load_data()
+            
+    def empty_bin(self):
+        if QMessageBox.question(self, "确认", "确定要清空回收站吗？所有项目将永久丢失。") == QMessageBox.Yes:
+            self.data_manager.empty_recycle_bin()
+            self.load_data()
 
 class WebDAVSettingsDialog(QDialog):
     """WebDAV 设置对话框"""

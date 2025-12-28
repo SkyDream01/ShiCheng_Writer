@@ -6,3 +6,5 @@ dist/
 *.db
 *.zip
 build.py
+*.json
+*.db*

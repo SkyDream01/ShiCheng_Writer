@@ -4,11 +4,11 @@ import os
 import json
 from datetime import datetime
 import threading
-import hashlib  # [新增] 引入 hashlib
+import hashlib
 
 DB_FILE = "ShiCheng_Writer.db"
 
-# [新增] 辅助函数：计算稳定的哈希值
+# 辅助函数：计算稳定的哈希值
 def calculate_hash(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
@@ -61,6 +61,7 @@ def initialize_database():
         UNIQUE(name, book_id)
     )
     """)
+    # [新增] 回收站表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS recycle_bin (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +259,7 @@ class DataManager:
             if not book_data:
                 return
             
+            # [修改] 移入回收站
             cursor = self.conn.cursor()
             cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
                         ('book', book_id, json.dumps(dict(book_data))))
@@ -353,7 +355,14 @@ class DataManager:
 
     def delete_chapter(self, chapter_id):
         with self.lock:
+            # [修改] 移动到回收站而不是直接删除
+            chapter_data = self.get_chapter_details(chapter_id)
+            if not chapter_data: return
+            
             cursor = self.conn.cursor()
+            cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
+                        ('chapter', chapter_id, json.dumps(dict(chapter_data))))
+            
             cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
             self.conn.commit()
 
@@ -364,6 +373,80 @@ class DataManager:
                         (new_volume_name, book_id, old_volume_name))
             self.conn.commit()
 
+    # --- [新增] 回收站相关方法 ---
+    def get_recycle_bin_items(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM recycle_bin ORDER BY deleted_at DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def restore_recycle_item(self, recycle_id):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM recycle_bin WHERE id = ?", (recycle_id,))
+            row = cursor.fetchone()
+            if not row: return False
+            
+            item_type = row['item_type']
+            item_data = json.loads(row['item_data'])
+            
+            if item_type == 'book':
+                # 尝试使用原ID恢复
+                try:
+                    cursor.execute("""
+                        INSERT INTO books (id, title, description, cover_path, "group", createTime, lastEditTime)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (item_data['id'], item_data['title'], item_data.get('description'), 
+                          item_data.get('cover_path'), item_data.get('group'), 
+                          item_data.get('createTime'), item_data.get('lastEditTime')))
+                except sqlite3.IntegrityError:
+                    # ID冲突则新建
+                    cursor.execute("""
+                        INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (item_data['title'], item_data.get('description'), 
+                          item_data.get('cover_path'), item_data.get('group'), 
+                          item_data.get('createTime'), item_data.get('lastEditTime')))
+                
+            elif item_type == 'chapter':
+                # 检查书籍是否存在
+                book_id = item_data['book_id']
+                cursor.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+                if not cursor.fetchone():
+                    return "parent_missing"
+
+                try:
+                     cursor.execute("""
+                        INSERT INTO chapters (id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (item_data['id'], item_data['book_id'], item_data['volume'], 
+                          item_data['title'], item_data['content'], item_data['word_count'],
+                          item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
+                except sqlite3.IntegrityError:
+                     cursor.execute("""
+                        INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (item_data['book_id'], item_data['volume'], 
+                          item_data['title'], item_data['content'], item_data['word_count'],
+                          item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
+
+            cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
+            self.conn.commit()
+            return True
+
+    def delete_recycle_item(self, recycle_id):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
+            self.conn.commit()
+            return True
+            
+    def empty_recycle_bin(self):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("DELETE FROM recycle_bin")
+            self.conn.commit()
+
+    # --- 素材与其他方法 ---
     def get_all_materials_names(self, book_id=None):
         cursor = self.conn.cursor()
         if book_id:
