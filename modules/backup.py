@@ -107,17 +107,23 @@ class BackupWorker(QThread):
                         content_path = os.path.join(book_path, 'content')
                         os.makedirs(content_path)
                         
+                        # 获取章节列表（注意：此处返回的数据不包含 content）
                         chapters = data_manager.get_chapters_for_book(book['id'])
                         total_word_count = 0
                         last_edit_chapter = "无章节"
                         volumes_structure = {}
                         
                         for chapter in chapters:
+                            # [修改] 单独获取章节内容
+                            # get_chapter_content 返回 (content, word_count)
+                            content_text, _ = data_manager.get_chapter_content(chapter['id'])
+                            
                             total_word_count += chapter['word_count']
                             last_edit_chapter = chapter['title']
                             
                             chapter_content_data = {
-                                "content": chapter['content'], "count": chapter['word_count'],
+                                "content": content_text, # 使用单独获取的内容
+                                "count": chapter['word_count'],
                                 "hash": chapter.get('hash', '')
                             }
                             chapter_filename = os.path.join(content_path, f"{chapter['createTime']}.json")
