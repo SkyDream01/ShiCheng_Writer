@@ -5,12 +5,10 @@ import json
 from datetime import datetime
 import threading
 import hashlib
-from .utils import get_app_root  # [新增] 导入路径工具
+from .utils import get_app_root 
 
-# [修改] 使用绝对路径，确保在 exe 环境下多线程或 CWD 改变时仍能找到数据库
 DB_FILE = os.path.join(get_app_root(), "ShiCheng_Writer.db")
 
-# 辅助函数：计算稳定的哈希值
 def calculate_hash(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
@@ -63,7 +61,6 @@ def initialize_database():
         UNIQUE(name, book_id)
     )
     """)
-    # [新增] 回收站表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS recycle_bin (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -168,9 +165,9 @@ class DataManager:
 
     def set_preference(self, key, value):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
 
     def get_webdav_settings(self):
         settings = {
@@ -185,12 +182,13 @@ class DataManager:
 
     def save_webdav_settings(self, settings):
         with self.lock:
-            self.set_preference('webdav_url', settings.get('webdav_url', ''))
-            self.set_preference('webdav_user', settings.get('webdav_user', ''))
-            self.set_preference('webdav_pass', settings.get('webdav_pass', ''))
-            self.set_preference('webdav_root', settings.get('webdav_root', '/shicheng/'))
-            self.set_preference('webdav_enabled', 'true' if settings.get('webdav_enabled') else 'false')
-            self.set_preference('webdav_sync_freq', settings.get('webdav_sync_freq', '实时'))
+            with self.conn:
+                self.set_preference('webdav_url', settings.get('webdav_url', ''))
+                self.set_preference('webdav_user', settings.get('webdav_user', ''))
+                self.set_preference('webdav_pass', settings.get('webdav_pass', ''))
+                self.set_preference('webdav_root', settings.get('webdav_root', '/shicheng/'))
+                self.set_preference('webdav_enabled', 'true' if settings.get('webdav_enabled') else 'false')
+                self.set_preference('webdav_sync_freq', settings.get('webdav_sync_freq', '实时'))
 
     def get_books_and_groups(self):
         cursor = self.conn.cursor()
@@ -216,44 +214,44 @@ class DataManager:
 
     def add_book(self, title, description="", cover_path="", group=""):
         with self.lock:
-            current_time = int(datetime.now().timestamp() * 1000)
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, (title, description, cover_path, group, current_time, current_time))
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                current_time = int(datetime.now().timestamp() * 1000)
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """, (title, description, cover_path, group, current_time, current_time))
+                return cursor.lastrowid
 
     def add_book_from_backup(self, book_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            backup_id = book_data.get('id')
-            cursor.execute("""
-                INSERT INTO books (id, title, description, "group", createTime, lastEditTime)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                backup_id,
-                book_data.get('name', '无标题'),
-                book_data.get('summary', ''),
-                book_data.get('group', '未分组'),
-                book_data.get('createTime'),
-                book_data.get('lastEditTime', book_data.get('createTime'))
-            ))
-            self.conn.commit()
-            if backup_id is None:
-                return cursor.lastrowid
-            return backup_id
+            with self.conn:
+                cursor = self.conn.cursor()
+                backup_id = book_data.get('id')
+                cursor.execute("""
+                    INSERT INTO books (id, title, description, "group", createTime, lastEditTime)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    backup_id,
+                    book_data.get('name', '无标题'),
+                    book_data.get('summary', ''),
+                    book_data.get('group', '未分组'),
+                    book_data.get('createTime'),
+                    book_data.get('lastEditTime', book_data.get('createTime'))
+                ))
+                if backup_id is None:
+                    return cursor.lastrowid
+                return backup_id
 
     def update_book(self, book_id, title, description, cover_path, group):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                UPDATE books
-                SET title = ?, description = ?, cover_path = ?, `group` = ?
-                WHERE id = ?
-            """, (title, description, cover_path, group, book_id))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    UPDATE books
+                    SET title = ?, description = ?, cover_path = ?, `group` = ?
+                    WHERE id = ?
+                """, (title, description, cover_path, group, book_id))
 
     def delete_book(self, book_id):
         with self.lock:
@@ -261,17 +259,14 @@ class DataManager:
             if not book_data:
                 return
             
-            # [修改] 移入回收站
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
-                        ('book', book_id, json.dumps(dict(book_data))))
-            
-            cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
+                            ('book', book_id, json.dumps(dict(book_data))))
+                cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
     def get_chapters_for_book(self, book_id):
         cursor = self.conn.cursor()
-        # 不查询 content 字段，列表加载速度提升百倍
         cursor.execute("""
             SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash 
             FROM chapters WHERE book_id = ? ORDER BY volume, id
@@ -292,90 +287,84 @@ class DataManager:
 
     def add_chapter(self, book_id, volume, title):
         with self.lock:
-            current_time = int(datetime.now().timestamp() * 1000)
-            content = f"# {title}\n\n　　"
-            word_count = len(content.strip())
-            # [修改] 使用 stable hash
-            content_hash = calculate_hash(content)
-            
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (book_id, volume, title, content, word_count, current_time, current_time, content_hash))
-            
-            book_edit_time = int(datetime.now().timestamp() * 1000)
-            cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (book_edit_time, book_id))
-            
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                current_time = int(datetime.now().timestamp() * 1000)
+                content = f"# {title}\n\n　　"
+                word_count = len(content.strip())
+                content_hash = calculate_hash(content)
+                
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (book_id, volume, title, content, word_count, current_time, current_time, content_hash))
+                
+                last_row_id = cursor.lastrowid
+                book_edit_time = int(datetime.now().timestamp() * 1000)
+                cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (book_edit_time, book_id))
+                return last_row_id
 
     def add_chapter_from_backup(self, book_id, chapter_data, content_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            last_edit_time = chapter_data.get('lastEditTime', chapter_data.get('createTime'))
-            cursor.execute("""
-                INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                book_id,
-                chapter_data.get('volumeName', '未分卷'),
-                chapter_data.get('name', '无标题'),
-                content_data.get('content', ''),
-                content_data.get('count', 0),
-                chapter_data.get('createTime'),
-                last_edit_time,
-                content_data.get('hash', '')
-            ))
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                cursor = self.conn.cursor()
+                last_edit_time = chapter_data.get('lastEditTime', chapter_data.get('createTime'))
+                cursor.execute("""
+                    INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    book_id,
+                    chapter_data.get('volumeName', '未分卷'),
+                    chapter_data.get('name', '无标题'),
+                    content_data.get('content', ''),
+                    content_data.get('count', 0),
+                    chapter_data.get('createTime'),
+                    last_edit_time,
+                    content_data.get('hash', '')
+                ))
+                return cursor.lastrowid
 
     def update_chapter_content(self, chapter_id, content):
         with self.lock:
-            word_count = len(content.strip())
-            # [修改] 使用 stable hash
-            content_hash = calculate_hash(content)
-            
-            current_time_ms = int(datetime.now().timestamp() * 1000)
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",
-                        (content, word_count, current_time_ms, content_hash, chapter_id))
+            with self.conn:
+                word_count = len(content.strip())
+                content_hash = calculate_hash(content)
+                current_time_ms = int(datetime.now().timestamp() * 1000)
+                
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",
+                            (content, word_count, current_time_ms, content_hash, chapter_id))
 
-            cursor.execute("SELECT book_id FROM chapters WHERE id = ?", (chapter_id,))
-            book_id_result = cursor.fetchone()
-            if book_id_result:
-                book_id = book_id_result['book_id']
-                cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (current_time_ms, book_id))
-            
-            self.conn.commit()
+                cursor.execute("SELECT book_id FROM chapters WHERE id = ?", (chapter_id,))
+                book_id_result = cursor.fetchone()
+                if book_id_result:
+                    book_id = book_id_result['book_id']
+                    cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (current_time_ms, book_id))
 
     def update_chapter_title(self, chapter_id, new_title):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE chapters SET title = ? WHERE id = ?", (new_title, chapter_id))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE chapters SET title = ? WHERE id = ?", (new_title, chapter_id))
 
     def delete_chapter(self, chapter_id):
         with self.lock:
-            # [修改] 移动到回收站而不是直接删除
             chapter_data = self.get_chapter_details(chapter_id)
             if not chapter_data: return
             
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
-                        ('chapter', chapter_id, json.dumps(dict(chapter_data))))
-            
-            cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
+                            ('chapter', chapter_id, json.dumps(dict(chapter_data))))
+                cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
 
     def update_volume_name(self, book_id, old_volume_name, new_volume_name):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE chapters SET volume = ? WHERE book_id = ? AND volume = ?",
-                        (new_volume_name, book_id, old_volume_name))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE chapters SET volume = ? WHERE book_id = ? AND volume = ?",
+                            (new_volume_name, book_id, old_volume_name))
 
-    # --- [新增] 回收站相关方法 ---
     def get_recycle_bin_items(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM recycle_bin ORDER BY deleted_at DESC")
@@ -383,72 +372,68 @@ class DataManager:
 
     def restore_recycle_item(self, recycle_id):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT * FROM recycle_bin WHERE id = ?", (recycle_id,))
-            row = cursor.fetchone()
-            if not row: return False
-            
-            item_type = row['item_type']
-            item_data = json.loads(row['item_data'])
-            
-            if item_type == 'book':
-                # 尝试使用原ID恢复
-                try:
-                    cursor.execute("""
-                        INSERT INTO books (id, title, description, cover_path, "group", createTime, lastEditTime)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (item_data['id'], item_data['title'], item_data.get('description'), 
-                          item_data.get('cover_path'), item_data.get('group'), 
-                          item_data.get('createTime'), item_data.get('lastEditTime')))
-                except sqlite3.IntegrityError:
-                    # ID冲突则新建
-                    cursor.execute("""
-                        INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (item_data['title'], item_data.get('description'), 
-                          item_data.get('cover_path'), item_data.get('group'), 
-                          item_data.get('createTime'), item_data.get('lastEditTime')))
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("SELECT * FROM recycle_bin WHERE id = ?", (recycle_id,))
+                row = cursor.fetchone()
+                if not row: return False
                 
-            elif item_type == 'chapter':
-                # 检查书籍是否存在
-                book_id = item_data['book_id']
-                cursor.execute("SELECT id FROM books WHERE id = ?", (book_id,))
-                if not cursor.fetchone():
-                    return "parent_missing"
+                item_type = row['item_type']
+                item_data = json.loads(row['item_data'])
+                
+                if item_type == 'book':
+                    try:
+                        cursor.execute("""
+                            INSERT INTO books (id, title, description, cover_path, "group", createTime, lastEditTime)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, (item_data['id'], item_data['title'], item_data.get('description'), 
+                              item_data.get('cover_path'), item_data.get('group'), 
+                              item_data.get('createTime'), item_data.get('lastEditTime')))
+                    except sqlite3.IntegrityError:
+                        cursor.execute("""
+                            INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (item_data['title'], item_data.get('description'), 
+                              item_data.get('cover_path'), item_data.get('group'), 
+                              item_data.get('createTime'), item_data.get('lastEditTime')))
+                    
+                elif item_type == 'chapter':
+                    book_id = item_data['book_id']
+                    cursor.execute("SELECT id FROM books WHERE id = ?", (book_id,))
+                    if not cursor.fetchone():
+                        return "parent_missing"
 
-                try:
-                     cursor.execute("""
-                        INSERT INTO chapters (id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (item_data['id'], item_data['book_id'], item_data['volume'], 
-                          item_data['title'], item_data['content'], item_data['word_count'],
-                          item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
-                except sqlite3.IntegrityError:
-                     cursor.execute("""
-                        INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (item_data['book_id'], item_data['volume'], 
-                          item_data['title'], item_data['content'], item_data['word_count'],
-                          item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
+                    try:
+                         cursor.execute("""
+                            INSERT INTO chapters (id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (item_data['id'], item_data['book_id'], item_data['volume'], 
+                              item_data['title'], item_data['content'], item_data['word_count'],
+                              item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
+                    except sqlite3.IntegrityError:
+                         cursor.execute("""
+                            INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (item_data['book_id'], item_data['volume'], 
+                              item_data['title'], item_data['content'], item_data['word_count'],
+                              item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
 
-            cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
-            self.conn.commit()
-            return True
+                cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
+                return True
 
     def delete_recycle_item(self, recycle_id):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
-            self.conn.commit()
-            return True
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
+                return True
             
     def empty_recycle_bin(self):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM recycle_bin")
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM recycle_bin")
 
-    # --- 素材与其他方法 ---
     def get_all_materials_names(self, book_id=None):
         cursor = self.conn.cursor()
         if book_id:
@@ -491,36 +476,36 @@ class DataManager:
     def add_material(self, name, type, description, book_id=None, content=None):
         try:
             with self.lock:
-                content_json = json.dumps(content if content is not None else {})
-                cursor = self.conn.cursor()
-                cursor.execute("INSERT INTO materials (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
-                            (name, type, description, book_id, content_json))
-                self.conn.commit()
-                return cursor.lastrowid
+                with self.conn:
+                    content_json = json.dumps(content if content is not None else {})
+                    cursor = self.conn.cursor()
+                    cursor.execute("INSERT INTO materials (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
+                                (name, type, description, book_id, content_json))
+                    return cursor.lastrowid
         except sqlite3.IntegrityError:
             print(f"添加素材 '{name}' 失败：名称已存在。")
             return None
 
     def add_material_from_backup(self, material_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            content = material_data.get('content') or material_data.get('settings')
-            cursor.execute("INSERT OR REPLACE INTO materials (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
-                        (material_data['id'], material_data['name'], material_data['type'],
-                            material_data.get('description', ''), content, material_data.get('book_id')))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                content = material_data.get('content') or material_data.get('settings')
+                cursor.execute("INSERT OR REPLACE INTO materials (id, name, type, description, content, book_id) VALUES (?, ?, ?, ?, ?, ?)",
+                            (material_data['id'], material_data['name'], material_data['type'],
+                                material_data.get('description', ''), content, material_data.get('book_id')))
 
     def update_material(self, material_id, name, type, description, content=None):
         try:
             with self.lock:
-                content_json = json.dumps(content if content is not None else {})
-                cursor = self.conn.cursor()
-                cursor.execute("""
-                    UPDATE materials SET name = ?, type = ?, description = ?, content = ?
-                    WHERE id = ?
-                """, (name, type, description, content_json, material_id))
-                self.conn.commit()
-                return True
+                with self.conn:
+                    content_json = json.dumps(content if content is not None else {})
+                    cursor = self.conn.cursor()
+                    cursor.execute("""
+                        UPDATE materials SET name = ?, type = ?, description = ?, content = ?
+                        WHERE id = ?
+                    """, (name, type, description, content_json, material_id))
+                    return True
         except Exception as e:
             print(f"数据库更新素材失败: {e}")
             return False
@@ -528,10 +513,10 @@ class DataManager:
     def delete_material(self, material_id):
         try:
             with self.lock:
-                cursor = self.conn.cursor()
-                cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
-                self.conn.commit()
-                return True
+                with self.conn:
+                    cursor = self.conn.cursor()
+                    cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
+                    return True
         except Exception as e:
             print(f"删除素材失败: {e}")
             return False
@@ -543,17 +528,17 @@ class DataManager:
 
     def rename_group(self, old_name, new_name):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE books SET `group` = ? WHERE `group` = ?", (new_name, old_name))
-            self.conn.commit()
-            return cursor.rowcount > 0
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE books SET `group` = ? WHERE `group` = ?", (new_name, old_name))
+                return cursor.rowcount > 0
 
     def delete_group(self, group_name):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("UPDATE books SET `group` = '未分组' WHERE `group` = ?", (group_name,))
-            self.conn.commit()
-            return cursor.rowcount > 0
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE books SET `group` = '未分组' WHERE `group` = ?", (group_name,))
+                return cursor.rowcount > 0
 
     def get_inspiration_fragments(self):
         cursor = self.conn.cursor()
@@ -567,19 +552,19 @@ class DataManager:
 
     def add_inspiration_fragment(self, type, content, source=""):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO inspiration_fragments (type, content, source) VALUES (?, ?, ?)",
-                        (type, content, source))
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO inspiration_fragments (type, content, source) VALUES (?, ?, ?)",
+                            (type, content, source))
+                return cursor.lastrowid
 
     def add_inspiration_fragment_from_backup(self, fragment_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO inspiration_fragments (id, type, content, source, created_at) VALUES (?, ?, ?, ?, ?)",
-                        (fragment_data['id'], fragment_data['type'], fragment_data['content'],
-                            fragment_data.get('source', ''), fragment_data.get('created_at')))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO inspiration_fragments (id, type, content, source, created_at) VALUES (?, ?, ?, ?, ?)",
+                            (fragment_data['id'], fragment_data['type'], fragment_data['content'],
+                                fragment_data.get('source', ''), fragment_data.get('created_at')))
 
     def get_inspiration_items(self):
         cursor = self.conn.cursor()
@@ -593,19 +578,19 @@ class DataManager:
 
     def add_inspiration_item(self, title, content="", tags="", parent_id=None):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO inspiration_items (title, content, tags, parent_id) VALUES (?, ?, ?, ?)",
-                        (title, content, tags, parent_id))
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO inspiration_items (title, content, tags, parent_id) VALUES (?, ?, ?, ?)",
+                            (title, content, tags, parent_id))
+                return cursor.lastrowid
 
     def add_inspiration_item_from_backup(self, item_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
-                        (item_data['id'], item_data['title'], item_data.get('content', ''),
-                            item_data.get('tags', ''), item_data.get('parent_id')))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
+                            (item_data['id'], item_data['title'], item_data.get('content', ''),
+                                item_data.get('tags', ''), item_data.get('parent_id')))
 
     def get_timelines_for_book(self, book_id):
         cursor = self.conn.cursor()
@@ -619,19 +604,19 @@ class DataManager:
 
     def add_timeline(self, book_id, name, description=""):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO timelines (book_id, name, description) VALUES (?, ?, ?)",
-                        (book_id, name, description))
-            self.conn.commit()
-            return cursor.lastrowid
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT INTO timelines (book_id, name, description) VALUES (?, ?, ?)",
+                            (book_id, name, description))
+                return cursor.lastrowid
 
     def add_timeline_from_backup(self, timeline_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("INSERT OR REPLACE INTO timelines (id, book_id, name, description) VALUES (?, ?, ?, ?)",
-                        (timeline_data['id'], timeline_data['book_id'], timeline_data['name'],
-                            timeline_data.get('description', '')))
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO timelines (id, book_id, name, description) VALUES (?, ?, ?, ?)",
+                            (timeline_data['id'], timeline_data['book_id'], timeline_data['name'],
+                                timeline_data.get('description', '')))
 
     def get_timeline_events(self, timeline_id):
         cursor = self.conn.cursor()
@@ -645,57 +630,57 @@ class DataManager:
 
     def add_timeline_event_from_backup(self, event_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            referenced_materials = event_data.get('referenced_materials')
-            if isinstance(referenced_materials, str):
-                try: 
-                    json.loads(referenced_materials)
-                except json.JSONDecodeError: 
-                    referenced_materials = json.dumps([])
-            else:
-                referenced_materials = json.dumps(referenced_materials or [])
+            with self.conn:
+                cursor = self.conn.cursor()
+                referenced_materials = event_data.get('referenced_materials')
+                if isinstance(referenced_materials, str):
+                    try: 
+                        json.loads(referenced_materials)
+                    except json.JSONDecodeError: 
+                        referenced_materials = json.dumps([])
+                else:
+                    referenced_materials = json.dumps(referenced_materials or [])
 
-            cursor.execute("""
-                INSERT OR REPLACE INTO timeline_events
-                (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                event_data['id'], event_data['timeline_id'], event_data.get('parent_id'),
-                event_data['title'], event_data.get('content'), event_data.get('event_time'),
-                event_data.get('order_index', 0), event_data.get('status'),
-                referenced_materials
-            ))
-            self.conn.commit()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO timeline_events
+                    (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    event_data['id'], event_data['timeline_id'], event_data.get('parent_id'),
+                    event_data['title'], event_data.get('content'), event_data.get('event_time'),
+                    event_data.get('order_index', 0), event_data.get('status'),
+                    referenced_materials
+                ))
 
     def update_timeline_events(self, timeline_id, events_data):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM timeline_events WHERE timeline_id = ?", (timeline_id,))
-            for event in events_data:
-                referenced_materials_json = json.dumps(event.get('referenced_materials', []))
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM timeline_events WHERE timeline_id = ?", (timeline_id,))
+                for event in events_data:
+                    referenced_materials_json = json.dumps(event.get('referenced_materials', []))
 
-                cursor.execute("""
-                INSERT INTO timeline_events
-                (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    event.get('id'), timeline_id, event.get('parent_id'), event.get('title'),
-                    event.get('content'), event.get('event_time'), event.get('order_index'),
-                    event.get('status'), referenced_materials_json
-                ))
-            self.conn.commit()
+                    cursor.execute("""
+                    INSERT INTO timeline_events
+                    (id, timeline_id, parent_id, title, content, event_time, order_index, status, referenced_materials)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        event.get('id'), timeline_id, event.get('parent_id'), event.get('title'),
+                        event.get('content'), event.get('event_time'), event.get('order_index'),
+                        event.get('status'), referenced_materials_json
+                    ))
 
     def clear_all_writing_data(self):
         with self.lock:
-            cursor = self.conn.cursor()
-            cursor.execute("DELETE FROM timeline_events")
-            cursor.execute("DELETE FROM timelines")
-            cursor.execute("DELETE FROM chapters")
-            cursor.execute("DELETE FROM materials")
-            cursor.execute("DELETE FROM books")
-            cursor.execute("DELETE FROM inspiration_items")
-            cursor.execute("DELETE FROM inspiration_fragments")
-            self.conn.commit()
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM timeline_events")
+                cursor.execute("DELETE FROM timelines")
+                cursor.execute("DELETE FROM chapters")
+                cursor.execute("DELETE FROM materials")
+                cursor.execute("DELETE FROM books")
+                cursor.execute("DELETE FROM inspiration_items")
+                cursor.execute("DELETE FROM inspiration_fragments")
 
     def get_chapters_modified_since(self, check_time):
         check_timestamp_ms = int(check_time.timestamp() * 1000)

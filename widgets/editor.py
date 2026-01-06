@@ -1,7 +1,7 @@
 # ShiCheng_Writer/widgets/editor.py
 from PySide6.QtWidgets import QTextEdit, QApplication
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, QFont, 
-                           QTextBlockFormat, QTextCursor)
+                           QTextBlockFormat, QTextCursor, QTextDocument) 
 from PySide6.QtCore import QRegularExpression, Qt
 
 class MaterialHighlighter(QSyntaxHighlighter):
@@ -41,7 +41,6 @@ class MaterialHighlighter(QSyntaxHighlighter):
         sorted_list = sorted(materials_list, key=len, reverse=True)
 
         # 2. [核心优化] 将所有关键词合并为一个正则表达式进行一次性匹配
-        # 使用 escape 防止关键词中包含正则特殊符号，然后用 | 连接
         escaped_list = [QRegularExpression.escape(m) for m in sorted_list]
         pattern_str = f"\\b({'|'.join(escaped_list)})\\b"
         
@@ -76,7 +75,7 @@ class Editor(QTextEdit):
         try:
             size = int(size_str.replace('px', ''))
             font.setPointSize(size)
-            # [修改] 使用字体族列表，兼容多平台，首选微软雅黑，回退到 PingFang (Mac) 或其他黑体
+            # 使用字体族列表，兼容多平台
             font.setFamilies(["Microsoft YaHei", "PingFang SC", "Heiti SC", "SimHei", "Sans-Serif"])
             self.setFont(font)
             
@@ -102,51 +101,104 @@ class Editor(QTextEdit):
         self.setTextCursor(cursor)
         
     def auto_indent_document(self):
-        self.setUpdatesEnabled(False)
+        """
+        [优化] 全文缩进：使用 Cursor 操作，保留撤销栈历史，不重置视图
+        """
         cursor = self.textCursor()
-        cursor.beginEditBlock()
-        scrollbar_pos = self.verticalScrollBar().value()
-        new_content = []
-        for i in range(self.document().blockCount()):
-            block = self.document().findBlockByNumber(i)
-            line = block.text()
-            if line.strip() and not line.startswith(("　　", "    ", "#")):
-                 new_content.append("　　" + line)
-            else:
-                 new_content.append(line)
-        self.setPlainText("\n".join(new_content))
-        self.verticalScrollBar().setValue(scrollbar_pos)
-        cursor.endEditBlock()
-        self.setUpdatesEnabled(True)
-        # 重置全文后需重新应用行高
-        self.set_line_height(150)
+        cursor.beginEditBlock() # 开始编辑块，确保可一次性撤销
+        
+        doc = self.document()
+        # 遍历所有段落
+        for i in range(doc.blockCount()):
+            block = doc.findBlockByNumber(i)
+            text = block.text()
+            
+            # 仅对非空、非缩进、非标题行进行缩进
+            if text.strip() and not text.startswith(("　　", "    ", "#")):
+                cursor.setPosition(block.position())
+                cursor.insertText("　　")
+        
+        cursor.endEditBlock() # 结束编辑块
 
     def auto_unindent_document(self):
-        self.setUpdatesEnabled(False)
+        """
+        [优化] 取消缩进：使用 Cursor 操作，保留撤销栈历史
+        """
         cursor = self.textCursor()
         cursor.beginEditBlock()
-        scrollbar_pos = self.verticalScrollBar().value()
-        new_content = []
-        for i in range(self.document().blockCount()):
-            block = self.document().findBlockByNumber(i)
-            line = block.text()
-            if line.startswith("　　"):
-                new_content.append(line[2:])
-            elif line.startswith("    "):
-                new_content.append(line[4:])
-            else:
-                new_content.append(line)
-        self.setPlainText("\n".join(new_content))
-        self.verticalScrollBar().setValue(scrollbar_pos)
+        
+        doc = self.document()
+        for i in range(doc.blockCount()):
+            block = doc.findBlockByNumber(i)
+            text = block.text()
+            
+            cursor.setPosition(block.position())
+            
+            if text.startswith("　　"):
+                # 选中前两个字符并删除
+                cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 2)
+                cursor.removeSelectedText()
+            elif text.startswith("    "):
+                # 选中前四个字符并删除
+                cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 4)
+                cursor.removeSelectedText()
+                
         cursor.endEditBlock()
-        self.setUpdatesEnabled(True)
-        # 重置全文后需重新应用行高
-        self.set_line_height(150)
 
     def update_highlighter(self, materials_list):
         """外部调用此方法来更新需要高亮的素材词汇"""
         self.highlighter.set_materials_list(materials_list)
         self.highlighter.update_highlight_color()
+
+    def find_text(self, text, backward=False, case_sensitive=False, whole_words=False):
+        """查找文本"""
+        if not text:
+            return False
+            
+        flags = QTextDocument.FindFlags()
+        if backward:
+            flags |= QTextDocument.FindBackward
+        if case_sensitive:
+            flags |= QTextDocument.FindCaseSensitively
+        if whole_words:
+            flags |= QTextDocument.FindWholeWords
+            
+        found = self.find(text, flags)
+        return found
+
+    def replace_current(self, text):
+        """替换当前选中的文本"""
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            cursor.insertText(text)
+            return True
+        return False
+
+    def replace_all(self, target, replacement, case_sensitive=False, whole_words=False):
+        """全部替换"""
+        if not target:
+            return 0
+            
+        # 保存当前光标位置
+        original_cursor = self.textCursor()
+        
+        # 移动到文档开头开始查找
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        self.setTextCursor(cursor)
+        
+        count = 0
+        cursor.beginEditBlock() # 批量替换作为一次撤销
+        while self.find_text(target, False, case_sensitive, whole_words):
+            self.replace_current(replacement)
+            count += 1
+        cursor.endEditBlock()
+        
+        # 恢复大致位置（可选）
+        if count == 0:
+             self.setTextCursor(original_cursor)
+            
+        return count
 
     def keyPressEvent(self, event):
         cursor = self.textCursor()

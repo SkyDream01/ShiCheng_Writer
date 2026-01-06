@@ -6,9 +6,125 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QLabel, QLineEdit, QCheckBox, QComboBox, 
                                QDialogButtonBox, QPushButton, QMessageBox, 
                                QTreeWidget, QTreeWidgetItem, QHeaderView, 
-                               QListWidget, QInputDialog, QTextEdit, QApplication)
+                               QListWidget, QInputDialog, QTextEdit, QApplication,
+                               QGridLayout) # [新增] QGridLayout
 from PySide6.QtCore import Qt
 
+# [新增] 查找与替换对话框类
+class SearchReplaceDialog(QDialog):
+    """查找与替换对话框"""
+    def __init__(self, editor, parent=None):
+        super().__init__(parent)
+        self.editor = editor
+        self.setWindowTitle("查找与替换")
+        self.setFixedWidth(380)
+        # 设置为非模态，允许用户在对话框打开时操作编辑器
+        self.setModal(False) 
+        
+        layout = QVBoxLayout(self)
+        
+        # 输入区域
+        input_layout = QGridLayout()
+        input_layout.addWidget(QLabel("查找内容:"), 0, 0)
+        self.find_input = QLineEdit()
+        self.find_input.textChanged.connect(self.update_buttons)
+        input_layout.addWidget(self.find_input, 0, 1)
+        
+        input_layout.addWidget(QLabel("替换为:"), 1, 0)
+        self.replace_input = QLineEdit()
+        input_layout.addWidget(self.replace_input, 1, 1)
+        
+        layout.addLayout(input_layout)
+        
+        # 选项区域
+        opt_layout = QHBoxLayout()
+        self.case_check = QCheckBox("区分大小写")
+        self.word_check = QCheckBox("全词匹配")
+        opt_layout.addWidget(self.case_check)
+        opt_layout.addWidget(self.word_check)
+        opt_layout.addStretch()
+        layout.addLayout(opt_layout)
+        
+        # 按钮区域
+        btn_box = QVBoxLayout()
+        
+        # 查找按钮行
+        find_btn_layout = QHBoxLayout()
+        self.find_prev_btn = QPushButton("查找上一个")
+        self.find_prev_btn.clicked.connect(lambda: self.do_find(backward=True))
+        self.find_next_btn = QPushButton("查找下一个")
+        self.find_next_btn.setDefault(True) # 回车默认触发
+        self.find_next_btn.clicked.connect(lambda: self.do_find(backward=False))
+        find_btn_layout.addWidget(self.find_prev_btn)
+        find_btn_layout.addWidget(self.find_next_btn)
+        
+        # 替换按钮行
+        replace_btn_layout = QHBoxLayout()
+        self.replace_btn = QPushButton("替换")
+        self.replace_btn.clicked.connect(self.do_replace)
+        self.replace_all_btn = QPushButton("全部替换")
+        self.replace_all_btn.clicked.connect(self.do_replace_all)
+        replace_btn_layout.addWidget(self.replace_btn)
+        replace_btn_layout.addWidget(self.replace_all_btn)
+        
+        layout.addLayout(find_btn_layout)
+        layout.addLayout(replace_btn_layout)
+        
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet("color: gray; font-size: 12px;")
+        layout.addWidget(self.status_label)
+        
+        self.update_buttons()
+        
+    def update_buttons(self):
+        has_text = bool(self.find_input.text())
+        self.find_prev_btn.setEnabled(has_text)
+        self.find_next_btn.setEnabled(has_text)
+        self.replace_btn.setEnabled(has_text)
+        self.replace_all_btn.setEnabled(has_text)
+        
+    def do_find(self, backward=False):
+        text = self.find_input.text()
+        found = self.editor.find_text(
+            text, 
+            backward=backward, 
+            case_sensitive=self.case_check.isChecked(),
+            whole_words=self.word_check.isChecked()
+        )
+        if not found:
+            self.status_label.setText("未找到匹配项")
+        else:
+            self.status_label.setText("")
+            self.editor.setFocus() # 焦点回到编辑器，方便用户看到高亮
+            
+    def do_replace(self):
+        # 先检查当前选区是否匹配，匹配则替换，否则查找下一个
+        cursor = self.editor.textCursor()
+        target = self.find_input.text()
+        
+        # 简单的逻辑：如果当前选中的就是目标文本，则替换
+        # 如果不是，则先查找下一个
+        if cursor.hasSelection() and cursor.selectedText() == target:
+             self.editor.replace_current(self.replace_input.text())
+             self.status_label.setText("已替换")
+             # 自动跳到下一个
+             self.do_find(backward=False)
+        else:
+             self.do_find(backward=False)
+             
+    def do_replace_all(self):
+        target = self.find_input.text()
+        replacement = self.replace_input.text()
+        count = self.editor.replace_all(
+            target, 
+            replacement, 
+            case_sensitive=self.case_check.isChecked(),
+            whole_words=self.word_check.isChecked()
+        )
+        QMessageBox.information(self, "替换完成", f"共替换了 {count} 处匹配项。")
+
+
+# 下面是原有的对话框类，保持不变
 class RecycleBinDialog(QDialog):
     """[新增] 回收站管理对话框"""
     def __init__(self, data_manager, parent=None):
