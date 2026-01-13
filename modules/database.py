@@ -169,27 +169,6 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
 
-    def get_webdav_settings(self):
-        settings = {
-            'webdav_url': self.get_preference('webdav_url', ''),
-            'webdav_user': self.get_preference('webdav_user', ''),
-            'webdav_pass': self.get_preference('webdav_pass', ''),
-            'webdav_root': self.get_preference('webdav_root', '/shicheng/'),
-            'webdav_enabled': self.get_preference('webdav_enabled', 'false') == 'true',
-            'webdav_sync_freq': self.get_preference('webdav_sync_freq', '实时')
-        }
-        return settings
-
-    def save_webdav_settings(self, settings):
-        with self.lock:
-            with self.conn:
-                self.set_preference('webdav_url', settings.get('webdav_url', ''))
-                self.set_preference('webdav_user', settings.get('webdav_user', ''))
-                self.set_preference('webdav_pass', settings.get('webdav_pass', ''))
-                self.set_preference('webdav_root', settings.get('webdav_root', '/shicheng/'))
-                self.set_preference('webdav_enabled', 'true' if settings.get('webdav_enabled') else 'false')
-                self.set_preference('webdav_sync_freq', settings.get('webdav_sync_freq', '实时'))
-
     def get_books_and_groups(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM books ORDER BY `group`, title")

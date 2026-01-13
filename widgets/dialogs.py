@@ -7,10 +7,10 @@ from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QDialogButtonBox, QPushButton, QMessageBox, 
                                QTreeWidget, QTreeWidgetItem, QHeaderView, 
                                QListWidget, QInputDialog, QTextEdit, QApplication,
-                               QGridLayout) # [新增] QGridLayout
-from PySide6.QtCore import Qt
+                               QGridLayout)
+from PySide6.QtCore import Qt, QThread, Signal 
 
-# [新增] 查找与替换对话框类
+# --- 查找与替换对话框 (保持不变) ---
 class SearchReplaceDialog(QDialog):
     """查找与替换对话框"""
     def __init__(self, editor, parent=None):
@@ -18,12 +18,10 @@ class SearchReplaceDialog(QDialog):
         self.editor = editor
         self.setWindowTitle("查找与替换")
         self.setFixedWidth(380)
-        # 设置为非模态，允许用户在对话框打开时操作编辑器
         self.setModal(False) 
         
         layout = QVBoxLayout(self)
         
-        # 输入区域
         input_layout = QGridLayout()
         input_layout.addWidget(QLabel("查找内容:"), 0, 0)
         self.find_input = QLineEdit()
@@ -36,7 +34,6 @@ class SearchReplaceDialog(QDialog):
         
         layout.addLayout(input_layout)
         
-        # 选项区域
         opt_layout = QHBoxLayout()
         self.case_check = QCheckBox("区分大小写")
         self.word_check = QCheckBox("全词匹配")
@@ -45,20 +42,17 @@ class SearchReplaceDialog(QDialog):
         opt_layout.addStretch()
         layout.addLayout(opt_layout)
         
-        # 按钮区域
         btn_box = QVBoxLayout()
         
-        # 查找按钮行
         find_btn_layout = QHBoxLayout()
         self.find_prev_btn = QPushButton("查找上一个")
         self.find_prev_btn.clicked.connect(lambda: self.do_find(backward=True))
         self.find_next_btn = QPushButton("查找下一个")
-        self.find_next_btn.setDefault(True) # 回车默认触发
+        self.find_next_btn.setDefault(True)
         self.find_next_btn.clicked.connect(lambda: self.do_find(backward=False))
         find_btn_layout.addWidget(self.find_prev_btn)
         find_btn_layout.addWidget(self.find_next_btn)
         
-        # 替换按钮行
         replace_btn_layout = QHBoxLayout()
         self.replace_btn = QPushButton("替换")
         self.replace_btn.clicked.connect(self.do_replace)
@@ -95,19 +89,14 @@ class SearchReplaceDialog(QDialog):
             self.status_label.setText("未找到匹配项")
         else:
             self.status_label.setText("")
-            self.editor.setFocus() # 焦点回到编辑器，方便用户看到高亮
+            self.editor.setFocus()
             
     def do_replace(self):
-        # 先检查当前选区是否匹配，匹配则替换，否则查找下一个
         cursor = self.editor.textCursor()
         target = self.find_input.text()
-        
-        # 简单的逻辑：如果当前选中的就是目标文本，则替换
-        # 如果不是，则先查找下一个
         if cursor.hasSelection() and cursor.selectedText() == target:
              self.editor.replace_current(self.replace_input.text())
              self.status_label.setText("已替换")
-             # 自动跳到下一个
              self.do_find(backward=False)
         else:
              self.do_find(backward=False)
@@ -124,14 +113,14 @@ class SearchReplaceDialog(QDialog):
         QMessageBox.information(self, "替换完成", f"共替换了 {count} 处匹配项。")
 
 
-# 下面是原有的对话框类，保持不变
+# --- 回收站对话框 (保持不变) ---
 class RecycleBinDialog(QDialog):
-    """[新增] 回收站管理对话框"""
+    """回收站管理对话框"""
     def __init__(self, data_manager, parent=None):
         super().__init__(parent)
         self.data_manager = data_manager
         self.setWindowTitle("回收站")
-        self.resize(750, 450) # 稍微加宽以容纳书籍名称
+        self.resize(750, 450)
         
         layout = QVBoxLayout(self)
         self.tree = QTreeWidget()
@@ -174,7 +163,6 @@ class RecycleBinDialog(QDialog):
                 origin = "-"
                 if item['item_type'] == 'chapter':
                     book_id = item_data.get('book_id')
-                    # [修改] 尝试获取书籍名称，提供更好的上下文
                     if book_id:
                         book_info = self.data_manager.get_book_details(book_id)
                         if book_info:
@@ -187,7 +175,7 @@ class RecycleBinDialog(QDialog):
                 tree_item.setText(1, type_str)
                 tree_item.setText(2, item['deleted_at'])
                 tree_item.setText(3, origin)
-                tree_item.setData(0, Qt.UserRole, item['id']) # Recycle Bin ID
+                tree_item.setData(0, Qt.UserRole, item['id'])
             except Exception as e:
                 print(f"加载回收站项目失败: {e}")
                 continue
@@ -202,14 +190,12 @@ class RecycleBinDialog(QDialog):
         if res == True:
             QMessageBox.information(self, "成功", "项目已还原。")
             self.load_data()
-            # 刷新父窗口视图
             parent = self.parent()
             if parent:
                 if hasattr(parent, 'load_books'):
                     parent.load_books()
                 if hasattr(parent, 'current_book_id') and parent.current_book_id:
                     parent.load_chapters_for_book(parent.current_book_id)
-                    
         elif res == "parent_missing":
              QMessageBox.warning(self, "无法还原", "该章节所属的书籍已不存在，无法直接还原。\n请先检查回收站并还原对应的书籍。")
         else:
@@ -230,110 +216,6 @@ class RecycleBinDialog(QDialog):
             self.data_manager.empty_recycle_bin()
             self.load_data()
 
-class WebDAVSettingsDialog(QDialog):
-    """WebDAV 设置对话框"""
-    # [修改] 参数顺序调整以兼容旧代码调用 (parent=self)，同时允许可选传入 backup_manager
-    def __init__(self, data_manager, parent=None, backup_manager=None):
-        super().__init__(parent)
-        self.data_manager = data_manager
-        
-        # [修改] 优先使用传入的实例，否则尝试从 parent 获取 (兼容性处理)
-        self.backup_manager = backup_manager
-        if not self.backup_manager and hasattr(parent, 'backup_manager'):
-             self.backup_manager = parent.backup_manager
-        
-        self.setWindowTitle("WebDAV 设置")
-        self.setMinimumSize(400, 300)
-
-        layout = QVBoxLayout(self)
-        form_layout = QFormLayout()
-
-        self.enabled_check = QCheckBox("启用 WebDAV 同步")
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://dav.example.com/webdav/")
-        self.user_edit = QLineEdit()
-        self.pass_edit = QLineEdit()
-        self.pass_edit.setEchoMode(QLineEdit.Password)
-        self.root_dir_edit = QLineEdit()
-        self.root_dir_edit.setPlaceholderText("/shicheng/")
-        self.sync_freq_combo = QComboBox()
-        self.sync_freq_combo.addItems(["实时", "每小时", "仅启动时"])
-        
-        form_layout.addRow(self.enabled_check)
-        form_layout.addRow("WebDAV 地址:", self.url_edit)
-        form_layout.addRow("用户名:", self.user_edit)
-        form_layout.addRow("密码/Token:", self.pass_edit)
-        form_layout.addRow("云端根目录:", self.root_dir_edit)
-        form_layout.addRow("同步频率:", self.sync_freq_combo)
-
-        layout.addLayout(form_layout)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, self)
-        self.test_button = QPushButton("测试连接")
-        buttons.addButton(self.test_button, QDialogButtonBox.ActionRole)
-
-        self.test_button.clicked.connect(self.test_webdav_connection)
-        buttons.accepted.connect(self.save_settings)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-
-        self.load_settings()
-
-    def load_settings(self):
-        settings = self.data_manager.get_webdav_settings()
-        self.enabled_check.setChecked(settings.get('webdav_enabled', False))
-        self.url_edit.setText(settings.get('webdav_url', ''))
-        self.user_edit.setText(settings.get('webdav_user', ''))
-        self.pass_edit.setText(settings.get('webdav_pass', ''))
-        self.root_dir_edit.setText(settings.get('webdav_root', '/shicheng/'))
-        self.sync_freq_combo.setCurrentText(settings.get('webdav_sync_freq', '实时'))
-
-    def save_settings(self):
-        settings = {
-            'webdav_enabled': self.enabled_check.isChecked(),
-            'webdav_url': self.url_edit.text(),
-            'webdav_user': self.user_edit.text(),
-            'webdav_pass': self.pass_edit.text(),
-            'webdav_root': self.root_dir_edit.text(),
-            'webdav_sync_freq': self.sync_freq_combo.currentText()
-        }
-        self.data_manager.save_webdav_settings(settings)
-        QMessageBox.information(self, "成功", "WebDAV 设置已保存。")
-        self.accept()
-        
-    def test_webdav_connection(self):
-        if not self.backup_manager:
-            QMessageBox.warning(self, "错误", "无法获取备份管理器实例，请检查程序初始化。")
-            return
-
-        # 临时保存当前UI上的设置用于测试
-        current_settings = {
-            'webdav_enabled': self.enabled_check.isChecked(),
-            'webdav_url': self.url_edit.text(),
-            'webdav_user': self.user_edit.text(),
-            'webdav_pass': self.pass_edit.text(),
-            'webdav_root': self.root_dir_edit.text(),
-            'webdav_sync_freq': self.sync_freq_combo.currentText()
-        }
-        self.data_manager.save_webdav_settings(current_settings)
-        
-        self.test_button.setEnabled(False)
-        self.test_button.setText("测试中...")
-        
-        # 强制刷新UI以免卡顿感
-        QApplication.processEvents()
-        
-        try:
-            success, message = self.backup_manager.test_webdav_connection()
-            if success:
-                QMessageBox.information(self, "连接成功", message)
-            else:
-                QMessageBox.critical(self, "连接失败", message)
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"测试过程中发生异常: {str(e)}")
-        finally:
-            self.test_button.setEnabled(True)
-            self.test_button.setText("测试连接")
 
 class BackupDialog(QDialog):
     def __init__(self, backup_manager, parent=None):
@@ -379,16 +261,7 @@ class BackupDialog(QDialog):
                 child.setData(0, Qt.UserRole, backup)
             local_root.setExpanded(True)
 
-        # Cloud Backups
-        remote_backups = self.backup_manager.list_remote_backups()
-        if remote_backups:
-            cloud_root = QTreeWidgetItem(self.backup_tree, ["云端备份 (WebDAV)"])
-            for backup in remote_backups:
-                child = QTreeWidgetItem(cloud_root, [backup['file'], backup['type'], "云端"])
-                child.setData(0, Qt.UserRole, backup)
-            cloud_root.setExpanded(True)
-        
-        if not local_backups and not remote_backups:
+        if not local_backups:
             self.backup_tree.addTopLevelItem(QTreeWidgetItem(["暂无任何备份文件"]))
 
     def restore_backup(self):
@@ -398,31 +271,7 @@ class BackupDialog(QDialog):
             return
             
         backup_info = selected_item.data(0, Qt.UserRole)
-        is_cloud = backup_info.get("source") == "cloud"
-
-        if is_cloud:
-            reply = QMessageBox.question(self, "确认恢复",
-                                         f"您确定要从【云端】恢复备份\n'{backup_info['file']}'\n吗？\n"
-                                         "这将首先从云端下载文件，然后覆盖本地数据。",
-                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply != QMessageBox.Yes:
-                return
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                remote_filename = os.path.basename(backup_info['path'])
-                downloaded_filepath = self.backup_manager.download_backup(remote_filename, temp_dir)
-                if not downloaded_filepath:
-                    QMessageBox.critical(self, "下载失败", "无法从云端下载备份文件，请检查网络和WebDAV设置。")
-                    return
-                
-                temp_backup_info = {
-                    "file": os.path.basename(downloaded_filepath),
-                    "dir": temp_dir,
-                    "type": backup_info['type']
-                }
-                self.proceed_with_restore(temp_backup_info)
-        else:
-            self.proceed_with_restore(backup_info)
+        self.proceed_with_restore(backup_info)
 
     def proceed_with_restore(self, backup_info):
         backup_type_lower = backup_info.get('type', '').lower()
@@ -458,21 +307,13 @@ class BackupDialog(QDialog):
             return
 
         backup_info = selected_item.data(0, Qt.UserRole)
-        is_cloud = backup_info.get("source") == "cloud"
-        source_text = "【云端】" if is_cloud else "【本地】"
 
         reply = QMessageBox.question(self, "确认删除",
-                                       f"确定要永久删除此 {source_text} 备份吗？\n'{backup_info['file']}'",
+                                       f"确定要永久删除此本地备份吗？\n'{backup_info['file']}'",
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
-            success = False
-            if is_cloud:
-                remote_filename = os.path.basename(backup_info['path'])
-                success = self.backup_manager.delete_remote_backup(remote_filename)
-            else:
-                success = self.backup_manager.delete_backup(backup_info)
-            
+            success = self.backup_manager.delete_backup(backup_info)
             if success:
                 QMessageBox.information(self, "成功", f"备份 '{backup_info['file']}' 已被删除。")
                 self.load_backups()

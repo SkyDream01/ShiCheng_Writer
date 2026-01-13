@@ -7,7 +7,6 @@ import tempfile
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QThread
 
-from .webdav_client import WebDAVClient
 from .database import DataManager
 
 class BackupWorker(QThread):
@@ -39,12 +38,6 @@ class BackupWorker(QThread):
         finally:
             local_data_manager.close()
 
-    def _get_webdav_client(self, data_manager):
-        settings = data_manager.get_webdav_settings()
-        if not settings.get('webdav_enabled'):
-            return None
-        return WebDAVClient(settings)
-
     def _run_snapshot(self, data_manager):
         if not self.snapshot_data:
             self.finished.emit(True, "无数据更新")
@@ -59,16 +52,6 @@ class BackupWorker(QThread):
                 json.dump(self.snapshot_data, f, ensure_ascii=False, indent=2)
             
             self.log.emit(f"快照线备份本地成功: {backup_filename}")
-            
-            # 上传
-            client = self._get_webdav_client(data_manager)
-            if client:
-                self.log.emit(f"WebDAV: 开始上传快照 {backup_filename}...")
-                success, msg = client.upload_file(backup_filepath, backup_filename)
-                self.log.emit(f"WebDAV: {msg}")
-                if success:
-                    self._cleanup_webdav(client, "snapshot")
-            
             self.finished.emit(True, "快照备份完成")
         except Exception as e:
             self.finished.emit(False, f"快照备份失败: {e}")
@@ -78,14 +61,6 @@ class BackupWorker(QThread):
         zip_filepath = self._create_zip(data_manager, prefix)
         
         if zip_filepath:
-            client = self._get_webdav_client(data_manager)
-            if client:
-                filename = os.path.basename(zip_filepath)
-                self.log.emit(f"WebDAV: 开始上传 {filename}...")
-                success, msg = client.upload_file(zip_filepath, filename)
-                self.log.emit(f"WebDAV: {msg}")
-                if success:
-                    self._cleanup_webdav(client, self.task_type)
             self.finished.emit(True, f"{self.task_type} 备份完成")
         else:
             self.finished.emit(False, "本地 ZIP 创建失败")
@@ -188,27 +163,6 @@ class BackupWorker(QThread):
             with open(filepath, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
 
-    def _cleanup_webdav(self, client, backup_type):
-        retention_map = {"snapshot": 100, "stage": 5, "archive": 15}
-        keep_count = retention_map.get(backup_type)
-        prefix_map = {
-            "snapshot": "backup_snapshot_",
-            "stage": "backup_stage_",
-            "archive": "backup_archive_"
-        }
-        file_prefix = prefix_map.get(backup_type)
-        if not file_prefix: return
-
-        try:
-            all_files = client.list_files()
-            backup_files = [info for info in all_files if os.path.basename(info['name']).startswith(file_prefix)]
-            if len(backup_files) > keep_count:
-                backup_files.sort(key=lambda x: x['modified'], reverse=True)
-                for f_info in backup_files[keep_count:]:
-                    client.delete_file(os.path.basename(f_info['name']))
-        except Exception:
-            pass
-
 class BackupManager(QObject):
     """
     备份管理器，作为前端和后台线程的桥梁
@@ -226,13 +180,6 @@ class BackupManager(QObject):
         self.last_snapshot_check_time = datetime.now()
         
         self._current_worker = None
-
-    def test_webdav_connection(self):
-        settings = self.data_manager.get_webdav_settings()
-        if not settings.get('webdav_enabled'):
-            return False, "WebDAV未启用。"
-        client = WebDAVClient(settings)
-        return client.test_connection()
 
     def _start_worker(self, task_type, snapshot_data=None):
         if self._current_worker and self._current_worker.isRunning():
@@ -306,39 +253,6 @@ class BackupManager(QObject):
         backups.sort(key=lambda x: x['file'], reverse=True)
         return backups
 
-    def list_remote_backups(self):
-        client = self._get_webdav_client_direct()
-        if not client: return []
-        all_remote_backups = []
-        try:
-            files = client.list_files()
-            for f_info in files:
-                file_name = os.path.basename(f_info['name'])
-                if not (file_name.endswith(('.zip', '.json')) and file_name.startswith('backup_')): continue
-                backup_info = {"file": file_name, "dir": client.root_path, "path": f_info['name'], "source": "cloud"}
-                if file_name.startswith('backup_snapshot_'): backup_info["type"] = "Snapshot"
-                elif file_name.startswith('backup_stage_'): backup_info["type"] = "Stage"
-                elif file_name.startswith('backup_archive_'): backup_info["type"] = "Archive"
-                else: continue
-                all_remote_backups.append(backup_info)
-        except Exception: pass
-        all_remote_backups.sort(key=lambda x: x['file'], reverse=True)
-        return all_remote_backups
-
-    def _get_webdav_client_direct(self):
-        settings = self.data_manager.get_webdav_settings()
-        if not settings.get('webdav_enabled'): return None
-        return WebDAVClient(settings)
-
-    def download_backup(self, remote_filename, local_dir):
-        client = self._get_webdav_client_direct()
-        if not client: return None
-        local_filepath = os.path.join(local_dir, remote_filename)
-        self.log_message.emit(f"正在下载 {remote_filename}...")
-        success, msg = client.download_file(remote_filename, local_filepath)
-        self.log_message.emit(f"下载结束: {msg}")
-        return local_filepath if success else None
-    
     def restore_from_snapshot(self, backup_info):
         backup_path = os.path.join(backup_info['dir'], backup_info['file'])
         if not os.path.exists(backup_path): return False
@@ -439,10 +353,3 @@ class BackupManager(QObject):
         except Exception as e:
             self.log_message.emit(f"删除失败: {e}")
             return False
-            
-    def delete_remote_backup(self, remote_filename):
-        client = self._get_webdav_client_direct()
-        if not client: return False
-        success, message = client.delete_file(remote_filename)
-        self.log_message.emit(f"WebDAV: {message}")
-        return success

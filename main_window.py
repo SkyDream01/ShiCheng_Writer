@@ -24,7 +24,8 @@ from modules.inspiration import InspirationPanel
 from modules.timeline_system import TimelinePanel
 from modules.utils import resource_path
 from modules.backup import BackupManager
-from widgets.dialogs import (WebDAVSettingsDialog, BackupDialog, ManageGroupsDialog, 
+# [Removed WebDAVSettingsDialog import]
+from widgets.dialogs import (BackupDialog, ManageGroupsDialog, 
                              EditBookDialog, RecycleBinDialog, SearchReplaceDialog)
 
 class MainWindow(QMainWindow):
@@ -276,9 +277,7 @@ class MainWindow(QMainWindow):
         backup_manage_action.triggered.connect(self.open_backup_manager)
         backup_menu.addAction(backup_manage_action)
 
-        webdav_settings_action = QAction("WebDAV 设置", self)
-        webdav_settings_action.triggered.connect(self.open_webdav_settings)
-        backup_menu.addAction(webdav_settings_action)
+        # [Removed WebDAV settings menu item]
 
         file_menu.addSeparator()
         exit_action = QAction("退出", self)
@@ -297,9 +296,7 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("视图")
         view_menu.addAction(self.toggle_theme_action)
 
-    def open_webdav_settings(self):
-        dialog = WebDAVSettingsDialog(self.data_manager, self)
-        dialog.exec()
+    # [Removed open_webdav_settings method]
     
     # [新增] 打开回收站
     def open_recycle_bin(self):
@@ -745,16 +742,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("系统已自动保存草稿", 2000)
 
     def update_timer_interval(self, timer_name, default_interval):
-        freq = self.data_manager.get_webdav_settings().get('webdav_sync_freq', '实时')
+        # WebDAV 功能已移除，直接使用默认间隔
         timer = getattr(self, timer_name)
-        if freq == '每小时':
-            timer.setInterval(60 * 60 * 1000)
-        elif freq == '仅启动时':
-            timer.stop()
-        else: # 实时
-            timer.setInterval(default_interval)
-            if not timer.isActive():
-                timer.start()
+        timer.setInterval(default_interval)
+        if not timer.isActive():
+            timer.start()
 
     def run_snapshot_backup(self):
         # 快照备份轻量级，依然走同步，或者也可以改为异步
