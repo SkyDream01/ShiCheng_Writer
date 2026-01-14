@@ -1,6 +1,7 @@
 # ShiCheng_Writer/main.py
 import sys
 import os
+import logging
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QCoreApplication, Qt
 
@@ -8,11 +9,26 @@ from PySide6.QtCore import QCoreApplication, Qt
 from modules.database import initialize_database, DataManager
 from modules.backup import BackupManager
 from modules.theme_manager import set_stylesheet
-from modules.utils import resource_path, get_app_root 
+from modules.utils import resource_path, get_app_root
 
 def main():
     # 将 MainWindow 的导入移至函数内部，确保所有依赖都已加载
     from main_window import MainWindow
+
+    # 配置日志系统
+    log_dir = os.path.join(get_app_root(), "logs")
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+    log_file = os.path.join(log_dir, "shicheng_writer.log")
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file, encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
 
     # 1. 初始化数据库
     initialize_database()
@@ -28,9 +44,9 @@ def main():
     if not os.path.exists(backup_dir):
         try:
             os.makedirs(backup_dir)
-            print(f"已自动创建备份目录: {backup_dir}")
+            logger.info(f"已自动创建备份目录: {backup_dir}")
         except Exception as e:
-            print(f"错误: 无法创建备份目录 '{backup_dir}': {e}")
+            logger.error(f"无法创建备份目录 '{backup_dir}': {e}")
 
     # 显式传入 base_backup_dir
     backup_manager = BackupManager(data_manager, base_backup_dir=backup_dir)
@@ -57,7 +73,7 @@ def main():
         # 仅当用户未明确设置主题时才自动切换
         if data_manager.get_preference('theme') is None:
             new_theme = 'dark' if scheme == Qt.ColorScheme.Dark else 'light'
-            print(f"系统主题已更改为: {new_theme.capitalize()}")
+            logger.info(f"系统主题已更改为: {new_theme.capitalize()}")
             set_stylesheet(new_theme)
             window.update_theme(new_theme)
 

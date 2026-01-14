@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QTreeWidget, QTreeWidgetItem, QHeaderView, QStackedWidget, QSizePolicy)
 from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequence, QFont, QIcon
 # 引入 QThread 和 Signal 用于异步备份
-from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
+from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal, QSortFilterProxyModel
 
 from modules.theme_manager import set_stylesheet
 from modules.database import DataManager
@@ -37,6 +37,13 @@ class MainWindow(QMainWindow):
         self.current_chapter_id = None
         self.is_text_changed = False
         self.current_theme = initial_theme
+        self.left_panel_visible = True
+        self.right_panel_visible = True
+        self.focus_mode = False
+        self.original_splitter_sizes = [280, 770, 350]  # 保存原始大小用于恢复
+        self.pre_focus_state = None  # 保存进入专注模式前的状态
+        self.saved_left_panel_size = 280  # 保存左侧面板大小
+        self.saved_right_panel_size = 350  # 保存右侧面板大小
 
         self.setWindowTitle("诗成写作 PC版")
         self.setGeometry(100, 100, 1400, 900)
@@ -63,8 +70,6 @@ class MainWindow(QMainWindow):
         
         # 初始化时启动自动保存
         self.setup_autosave()
-        
-        self.run_archive_backup()
 
         self.typing_timer = QTimer(self)
         self.typing_timer.setInterval(5000)
@@ -101,12 +106,14 @@ class MainWindow(QMainWindow):
         status_bar = self.statusBar()
         status_bar.showMessage("欢迎使用诗成写作！")
         
+        self.current_book_chapter_label = QLabel("未选择书籍")
         self.word_count_label = QLabel("字数: 0")
         self.typing_speed_label = QLabel("速度: 0 字/分")
         self.font_size_combobox = QComboBox()
         self.font_size_combobox.addItems(["14px", "16px", "18px", "20px"])
         self.font_size_combobox.currentIndexChanged.connect(self.on_font_size_changed)
 
+        status_bar.addPermanentWidget(self.current_book_chapter_label)
         status_bar.addPermanentWidget(self.word_count_label)
         status_bar.addPermanentWidget(self.typing_speed_label)
         status_bar.addPermanentWidget(self.font_size_combobox)
@@ -128,15 +135,34 @@ class MainWindow(QMainWindow):
         add_book_action.triggered.connect(self.add_new_book)
         book_toolbar.addAction(add_book_action)
 
+        # 搜索框
+        search_layout = QHBoxLayout()
+        search_layout.setContentsMargins(2, 2, 2, 2)
+        self.book_search_input = QLineEdit()
+        self.book_search_input.setPlaceholderText("搜索书籍...")
+        self.book_search_input.textChanged.connect(self.filter_books)
+        search_layout.addWidget(self.book_search_input)
+        
+        # 添加搜索框到工具栏下方
+        search_widget = QWidget()
+        search_widget.setLayout(search_layout)
+
         self.book_tree = QTreeView()
         self.book_tree.setHeaderHidden(True)
         self.book_model = QStandardItemModel()
-        self.book_tree.setModel(self.book_model)
+        # 创建代理模型用于过滤
+        self.book_proxy_model = QSortFilterProxyModel()
+        self.book_proxy_model.setSourceModel(self.book_model)
+        self.book_proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.book_proxy_model.setRecursiveFilteringEnabled(True)  # 启用递归过滤以匹配子项
+        self.book_tree.setModel(self.book_proxy_model)
         self.book_tree.clicked.connect(self.on_book_selected)
+        self.book_tree.doubleClicked.connect(self.on_book_double_clicked)
         self.book_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.book_tree.customContextMenuRequested.connect(self.open_book_menu)
 
         book_layout.addWidget(book_toolbar)
+        book_layout.addWidget(search_widget)
         book_layout.addWidget(self.book_tree)
         book_widget.setLayout(book_layout)
 
@@ -151,15 +177,31 @@ class MainWindow(QMainWindow):
         self.add_chapter_toolbar_action.setEnabled(False) 
         chapter_toolbar.addAction(self.add_chapter_toolbar_action)
 
+        # 章节搜索框
+        chapter_search_layout = QHBoxLayout()
+        chapter_search_layout.setContentsMargins(2, 2, 2, 2)
+        self.chapter_search_input = QLineEdit()
+        self.chapter_search_input.setPlaceholderText("搜索章节...")
+        self.chapter_search_input.textChanged.connect(self.filter_chapters)
+        chapter_search_layout.addWidget(self.chapter_search_input)
+        chapter_search_widget = QWidget()
+        chapter_search_widget.setLayout(chapter_search_layout)
+
         self.chapter_tree = QTreeView()
         self.chapter_tree.setHeaderHidden(True)
         self.chapter_model = QStandardItemModel()
-        self.chapter_tree.setModel(self.chapter_model)
+        # 创建代理模型用于过滤
+        self.chapter_proxy_model = QSortFilterProxyModel()
+        self.chapter_proxy_model.setSourceModel(self.chapter_model)
+        self.chapter_proxy_model.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.chapter_proxy_model.setRecursiveFilteringEnabled(True)
+        self.chapter_tree.setModel(self.chapter_proxy_model)
         self.chapter_tree.clicked.connect(self.on_chapter_selected)
         self.chapter_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.chapter_tree.customContextMenuRequested.connect(self.open_chapter_menu)
 
         chapter_layout.addWidget(chapter_toolbar)
+        chapter_layout.addWidget(chapter_search_widget)
         chapter_layout.addWidget(self.chapter_tree)
         chapter_widget.setLayout(chapter_layout)
         
@@ -246,6 +288,19 @@ class MainWindow(QMainWindow):
         self.find_action.setShortcut(QKeySequence("Ctrl+F"))
         self.find_action.triggered.connect(self.open_find_dialog)
 
+        # 面板控制快捷键
+        self.toggle_left_panel_action = QAction("显示/隐藏左侧面板", self)
+        self.toggle_left_panel_action.setShortcut(QKeySequence("Ctrl+1"))
+        self.toggle_left_panel_action.triggered.connect(self.toggle_left_panel)
+
+        self.toggle_right_panel_action = QAction("显示/隐藏右侧面板", self)
+        self.toggle_right_panel_action.setShortcut(QKeySequence("Ctrl+2"))
+        self.toggle_right_panel_action.triggered.connect(self.toggle_right_panel)
+
+        self.toggle_focus_mode_action = QAction("切换专注模式", self)
+        self.toggle_focus_mode_action.setShortcut(QKeySequence("Ctrl+3"))
+        self.toggle_focus_mode_action.triggered.connect(self.toggle_focus_mode)
+
     def setup_menu_bar(self):
         menu_bar = self.menuBar()
 
@@ -277,7 +332,10 @@ class MainWindow(QMainWindow):
         backup_manage_action.triggered.connect(self.open_backup_manager)
         backup_menu.addAction(backup_manage_action)
 
-        # [Removed WebDAV settings menu item]
+        # 最近编辑的章节菜单
+        recent_menu = file_menu.addMenu("最近编辑的章节")
+        self.recent_menu = recent_menu
+        recent_menu.aboutToShow.connect(self.update_recent_chapters_menu)
 
         file_menu.addSeparator()
         exit_action = QAction("退出", self)
@@ -295,8 +353,163 @@ class MainWindow(QMainWindow):
 
         view_menu = menu_bar.addMenu("视图")
         view_menu.addAction(self.toggle_theme_action)
+        view_menu.addSeparator()
+        view_menu.addAction(self.toggle_left_panel_action)
+        view_menu.addAction(self.toggle_right_panel_action)
+        view_menu.addAction(self.toggle_focus_mode_action)
 
     # [Removed open_webdav_settings method]
+    
+    def update_recent_chapters_menu(self):
+        # 清空菜单
+        self.recent_menu.clear()
+        # 获取最近章节
+        recent_chapters = self.data_manager.get_recent_chapters(limit=10)
+        if not recent_chapters:
+            no_item = QAction("无最近编辑的章节", self)
+            no_item.setEnabled(False)
+            self.recent_menu.addAction(no_item)
+            return
+        
+        for chapter in recent_chapters:
+            # 格式化显示：章节名 (书籍名)
+            title = f"{chapter['title']} ({chapter['book_title']})"
+            action = QAction(title, self)
+            action.setData(chapter['id'])  # 存储章节ID
+            action.triggered.connect(lambda checked, ch_id=chapter['id']: self.open_recent_chapter(ch_id))
+            self.recent_menu.addAction(action)
+    
+    def open_recent_chapter(self, chapter_id):
+        # 获取章节详情并打开
+        chapter_info = self.data_manager.get_chapter_info(chapter_id)
+        if not chapter_info:
+            QMessageBox.warning(self, "错误", "找不到该章节。")
+            return
+        
+        # 切换到对应书籍
+        book_id = chapter_info['book_id']
+        # 如果当前书籍不是该章节所属书籍，切换到该书籍
+        if self.current_book_id != book_id:
+            # 找到书籍项并选中
+            self.current_book_id = book_id
+            self.load_chapters_for_book(book_id)
+            self.material_panel.set_book(book_id)
+            self.inspiration_panel.refresh_all()
+            self.timeline_panel.set_book(book_id)
+            self.refresh_editor_highlighter()
+        
+        # 找到章节项并选中
+        self.find_and_select_chapter(chapter_id)
+    
+    def toggle_left_panel(self):
+        if not self.splitter or self.splitter.count() < 3:
+            return
+        
+        if self.left_panel_visible:
+            # 将要隐藏左侧面板：保存当前大小
+            current_sizes = self.splitter.sizes()
+            self.saved_left_panel_size = current_sizes[0] if current_sizes[0] > 0 else 280
+            # 隐藏部件
+            self.splitter.widget(0).setVisible(False)
+            self.left_panel_visible = False
+        else:
+            # 将要显示左侧面板：恢复大小
+            self.splitter.widget(0).setVisible(True)
+            self.left_panel_visible = True
+            current_sizes = self.splitter.sizes()
+            # 重新分配空间：左侧面板使用保存的大小
+            left_size = self.saved_left_panel_size
+            # 总宽度减去左侧面板大小，剩余空间分配给中间和右侧面板
+            total_width = self.splitter.width()
+            if total_width > left_size + 50:  # 确保有足够空间
+                # 保持中间和右侧面板的当前比例
+                middle_ratio = current_sizes[1] / (current_sizes[1] + current_sizes[2]) if (current_sizes[1] + current_sizes[2]) > 0 else 0.7
+                remaining = total_width - left_size
+                middle_size = max(100, int(remaining * middle_ratio))  # 确保最小宽度
+                right_size = max(100, remaining - middle_size)  # 确保最小宽度
+                self.splitter.setSizes([left_size, middle_size, right_size])
+            else:
+                # 使用默认大小
+                self.splitter.setSizes([left_size, 770, 350])
+        
+        # 强制更新布局
+        self.splitter.update()
+        self.splitter.updateGeometry()
+    
+    def toggle_right_panel(self):
+        if not self.splitter or self.splitter.count() < 3:
+            return
+        
+        if self.right_panel_visible:
+            # 将要隐藏右侧面板：保存当前大小
+            current_sizes = self.splitter.sizes()
+            self.saved_right_panel_size = current_sizes[2] if current_sizes[2] > 0 else 350
+            # 隐藏部件
+            self.splitter.widget(2).setVisible(False)
+            self.right_panel_visible = False
+        else:
+            # 将要显示右侧面板：恢复大小
+            self.splitter.widget(2).setVisible(True)
+            self.right_panel_visible = True
+            current_sizes = self.splitter.sizes()
+            # 重新分配空间：右侧面板使用保存的大小
+            right_size = self.saved_right_panel_size
+            # 总宽度减去右侧面板大小，剩余空间分配给左侧和中间面板
+            total_width = self.splitter.width()
+            if total_width > right_size + 50:  # 确保有足够空间
+                # 保持左侧和中间面板的当前比例
+                left_ratio = current_sizes[0] / (current_sizes[0] + current_sizes[1]) if (current_sizes[0] + current_sizes[1]) > 0 else 0.3
+                remaining = total_width - right_size
+                left_size = max(100, int(remaining * left_ratio))  # 确保最小宽度
+                middle_size = max(100, remaining - left_size)  # 确保最小宽度
+                self.splitter.setSizes([left_size, middle_size, right_size])
+            else:
+                # 使用默认大小
+                self.splitter.setSizes([280, 770, right_size])
+        
+        # 强制更新布局
+        self.splitter.update()
+        self.splitter.updateGeometry()
+    
+    def toggle_focus_mode(self):
+        if not self.focus_mode:
+            # 进入专注模式：保存当前状态
+            self.pre_focus_state = {
+                'left_visible': self.left_panel_visible,
+                'right_visible': self.right_panel_visible,
+                'sizes': self.splitter.sizes()
+            }
+            # 隐藏左右面板
+            self.splitter.widget(0).setVisible(False)
+            self.splitter.widget(2).setVisible(False)
+            self.left_panel_visible = False
+            self.right_panel_visible = False
+            # 设置中央面板占据全部空间
+            sizes = self.splitter.sizes()
+            total = sum(sizes)
+            if total > 0:
+                self.splitter.setSizes([0, total, 0])
+            self.focus_mode = True
+        else:
+            # 退出专注模式：恢复之前状态
+            if self.pre_focus_state:
+                # 恢复面板可见性
+                self.splitter.widget(0).setVisible(self.pre_focus_state['left_visible'])
+                self.splitter.widget(2).setVisible(self.pre_focus_state['right_visible'])
+                self.left_panel_visible = self.pre_focus_state['left_visible']
+                self.right_panel_visible = self.pre_focus_state['right_visible']
+                # 恢复分割器大小
+                self.splitter.setSizes(self.pre_focus_state['sizes'])
+            else:
+                # 没有保存状态，使用默认
+                self.splitter.widget(0).setVisible(True)
+                self.splitter.widget(2).setVisible(True)
+                self.left_panel_visible = True
+                self.right_panel_visible = True
+                self.splitter.setSizes(self.original_splitter_sizes)
+            self.focus_mode = False
+        self.splitter.update()
+        self.splitter.updateGeometry()
     
     # [新增] 打开回收站
     def open_recycle_bin(self):
@@ -381,9 +594,28 @@ class MainWindow(QMainWindow):
                 item.setEditable(False)
                 group_item.appendRow(item)
         self.book_tree.expandAll()
+        # 应用现有搜索过滤
+        self.filter_books()
+
+    def filter_books(self):
+        search_text = self.book_search_input.text()
+        if hasattr(self, 'book_proxy_model'):
+            self.book_proxy_model.setFilterRegularExpression(search_text if search_text else "")
+            self.book_tree.expandAll()  # 展开所有匹配项
+
+    def filter_chapters(self):
+        search_text = self.chapter_search_input.text()
+        if hasattr(self, 'chapter_proxy_model'):
+            self.chapter_proxy_model.setFilterRegularExpression(search_text if search_text else "")
+            self.chapter_tree.expandAll()  # 展开所有匹配项
 
     def on_book_selected(self, index):
-        item = self.book_model.itemFromIndex(index)
+        # 映射代理索引到源索引
+        if hasattr(self, 'book_proxy_model'):
+            source_index = self.book_proxy_model.mapToSource(index)
+        else:
+            source_index = index
+        item = self.book_model.itemFromIndex(source_index)
         if not item or item.data(Qt.UserRole) == "group":
             return
             
@@ -400,6 +632,7 @@ class MainWindow(QMainWindow):
             self.timeline_panel.set_book(book_id)
             self.refresh_editor_highlighter()
             self.setWindowTitle(f"诗成写作 PC版 - {item.text()}")
+            self.current_book_chapter_label.setText(f"书籍: {item.text()}")
             self.add_chapter_action.setEnabled(True)
             self.add_chapter_toolbar_action.setEnabled(True)
             self.export_action.setEnabled(True)
@@ -425,29 +658,66 @@ class MainWindow(QMainWindow):
             self.word_count_label.setText("字数: -")
             self.typing_speed_label.setText("速度: -")
 
+    def on_book_double_clicked(self, index):
+        # 映射代理索引到源索引
+        if hasattr(self, 'book_proxy_model'):
+            source_index = self.book_proxy_model.mapToSource(index)
+        else:
+            source_index = index
+        item = self.book_model.itemFromIndex(source_index)
+        if not item:
+            return
+        data = item.data(Qt.UserRole)
+        if data == "group":  # 双击分组，在该分组中新建书籍
+            group_name = item.text()
+            self.add_new_book_to_group(group_name)
+        # 双击书籍不做特殊处理，单击已足够
+
     def open_book_menu(self, position):
         index = self.book_tree.indexAt(position)
         if not index.isValid(): return
-        item = self.book_model.itemFromIndex(index)
-        book_id = item.data(Qt.UserRole)
-        if not isinstance(book_id, int): return
+        # 映射代理索引到源索引
+        if hasattr(self, 'book_proxy_model'):
+            source_index = self.book_proxy_model.mapToSource(index)
+        else:
+            source_index = index
+        item = self.book_model.itemFromIndex(source_index)
+        data = item.data(Qt.UserRole)
         menu = QMenu()
-        edit_action = menu.addAction("编辑书籍信息")
-        set_group_action = menu.addAction("设置分组")
-        export_action = menu.addAction("导出为 TXT")
-        delete_action = menu.addAction("删除书籍")
         
-        action = menu.exec(self.book_tree.viewport().mapToGlobal(position))
-        
-        if action == edit_action: self.edit_book(book_id)
-        elif action == delete_action: self.delete_book(book_id)
-        elif action == set_group_action: self.set_book_group(book_id)
-        elif action == export_action: self.export_book(book_id)
+        if isinstance(data, int):  # 书籍
+            edit_action = menu.addAction("编辑书籍信息")
+            set_group_action = menu.addAction("设置分组")
+            export_action = menu.addAction("导出为 TXT")
+            delete_action = menu.addAction("删除书籍")
+            
+            action = menu.exec(self.book_tree.viewport().mapToGlobal(position))
+            
+            if action == edit_action: self.edit_book(data)
+            elif action == delete_action: self.delete_book(data)
+            elif action == set_group_action: self.set_book_group(data)
+            elif action == export_action: self.export_book(data)
+        else:  # 分组
+            group_name = item.text()
+            new_book_action = menu.addAction("新建书籍")
+            rename_group_action = menu.addAction("重命名分组")
+            delete_group_action = menu.addAction("删除分组")
+            
+            action = menu.exec(self.book_tree.viewport().mapToGlobal(position))
+            
+            if action == new_book_action: self.add_new_book_to_group(group_name)
+            elif action == rename_group_action: self.rename_group(group_name)
+            elif action == delete_group_action: self.delete_group(group_name)
 
     def open_chapter_menu(self, position):
         index = self.chapter_tree.indexAt(position)
         if not index.isValid(): return
-        item = self.chapter_model.itemFromIndex(index)
+        # 映射代理索引到源索引
+        if hasattr(self, 'chapter_proxy_model'):
+            source_index = self.chapter_proxy_model.mapToSource(index)
+        else:
+            source_index = index
+        item = self.chapter_model.itemFromIndex(source_index)
         data = item.data(Qt.UserRole)
         menu = QMenu()
         if isinstance(data, int):
@@ -470,6 +740,41 @@ class MainWindow(QMainWindow):
             self.data_manager.add_book(title, group="未分组")
             self.load_books()
             self.statusBar().showMessage(f"书籍《{title}》已创建！", 3000)
+
+    def add_new_book_to_group(self, group_name):
+        title, ok = QInputDialog.getText(self, f"在「{group_name}」中新建书籍", "请输入书名:")
+        if ok and title:
+            self.data_manager.add_book(title, group=group_name)
+            self.load_books()
+            self.statusBar().showMessage(f"书籍《{title}》已在「{group_name}」分组中创建！", 3000)
+
+    def rename_group(self, old_name):
+        new_name, ok = QInputDialog.getText(self, "重命名分组", "请输入新的分组名称:", text=old_name)
+        if ok and new_name and new_name != old_name:
+            self.data_manager.rename_group(old_name, new_name)
+            self.load_books()
+            self.statusBar().showMessage(f"分组「{old_name}」已重命名为「{new_name}」", 3000)
+
+    def delete_group(self, group_name):
+        books_in_group = self.data_manager.get_books_by_group(group_name)
+        if books_in_group:
+            reply = QMessageBox.question(self, "确认删除分组", 
+                f"分组「{group_name}」中有 {len(books_in_group)} 本书籍。删除分组将会把这些书籍移动到「未分组」。\n\n确定要继续吗？", 
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        else:
+            reply = QMessageBox.question(self, "确认删除", f"确定要删除空分组「{group_name}」吗？", 
+                                         QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        
+        self.data_manager.delete_group(group_name)
+        self.load_books()
+        if books_in_group:
+            self.statusBar().showMessage(f"分组「{group_name}」已删除，{len(books_in_group)} 本书籍已移动到「未分组」", 3000)
+        else:
+            self.statusBar().showMessage(f"空分组「{group_name}」已删除", 3000)
 
     def edit_book(self, book_id):
         book_details = self.data_manager.get_book_details(book_id)
@@ -574,7 +879,12 @@ class MainWindow(QMainWindow):
         self.chapter_tree.expandAll()
 
     def on_chapter_selected(self, index):
-        item = self.chapter_model.itemFromIndex(index)
+        # 映射代理索引到源索引
+        if hasattr(self, 'chapter_proxy_model'):
+            source_index = self.chapter_proxy_model.mapToSource(index)
+        else:
+            source_index = index
+        item = self.chapter_model.itemFromIndex(source_index)
         if not item or not isinstance(item.data(Qt.UserRole), int):
              return
         
@@ -595,7 +905,7 @@ class MainWindow(QMainWindow):
         self.editor.setPlainText(content)
         self.editor.blockSignals(False)
         self.is_text_changed = False
-        self.word_count_label.setText(f"字数: {count}")
+        self.update_word_count_label(count)
         self.typing_speed_label.setText("速度: 0 字/分")
         self.statusBar().showMessage(f"已打开章节: {item.text()}", 3000)
         self.last_char_count = count
@@ -665,7 +975,7 @@ class MainWindow(QMainWindow):
             content = self.editor.toPlainText()
             self.data_manager.update_chapter_content(self.current_chapter_id, content)
             self.is_text_changed = False
-            self.word_count_label.setText(f"字数: {len(content.strip())}")
+            self.update_word_count_label(len(content.strip()))
             self.statusBar().showMessage(f"章节已保存！", 2000)
             return True
         elif not self.is_text_changed and self.current_chapter_id:
@@ -680,12 +990,30 @@ class MainWindow(QMainWindow):
         else:
             self.editor.update_highlighter([])
             
+    def update_word_count_label(self, chapter_word_count=None):
+        if chapter_word_count is None:
+            chapter_word_count = len(self.editor.toPlainText().strip())
+        
+        if self.current_book_id:
+            total_word_count = self.data_manager.get_book_word_count(self.current_book_id)
+            if total_word_count > 0:
+                percentage = (chapter_word_count / total_word_count) * 100 if total_word_count > 0 else 0
+                self.word_count_label.setText(f"字数: {chapter_word_count}/{total_word_count} ({percentage:.1f}%)")
+            else:
+                self.word_count_label.setText(f"字数: {chapter_word_count}")
+        else:
+            self.word_count_label.setText(f"字数: {chapter_word_count}")
+
     def on_text_changed(self):
         if not self.editor.signalsBlocked():
             self.is_text_changed = True
             content = self.editor.toPlainText()
             count = len(content.strip())
-            self.word_count_label.setText(f"字数: {count}*")
+            self.update_word_count_label(count)
+            # 添加星号表示未保存
+            current_text = self.word_count_label.text()
+            if not current_text.endswith('*'):
+                self.word_count_label.setText(current_text + '*')
 
     def update_typing_speed(self):
         if not self.current_chapter_id:
@@ -780,3 +1108,4 @@ class MainWindow(QMainWindow):
             self.editor.clear()
             self.current_book_id = None
             self.current_chapter_id = None
+    

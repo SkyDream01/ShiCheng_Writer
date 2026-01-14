@@ -7,7 +7,7 @@ import tempfile
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QThread
 
-from .database import DataManager
+from .database import DataManager, DB_FILE
 
 class BackupWorker(QThread):
     """
@@ -15,6 +15,7 @@ class BackupWorker(QThread):
     """
     finished = Signal(bool, str) # success, message
     log = Signal(str)
+    backup_created = Signal(str, str, str) # backup_type, backup_filename, message
 
     def __init__(self, task_type, base_backup_dir, parent=None):
         super().__init__(parent)
@@ -52,6 +53,7 @@ class BackupWorker(QThread):
                 json.dump(self.snapshot_data, f, ensure_ascii=False, indent=2)
             
             self.log.emit(f"快照线备份本地成功: {backup_filename}")
+            self.backup_created.emit('snapshot', backup_filename, "快照备份完成")
             self.finished.emit(True, "快照备份完成")
         except Exception as e:
             self.finished.emit(False, f"快照备份失败: {e}")
@@ -61,6 +63,8 @@ class BackupWorker(QThread):
         zip_filepath = self._create_zip(data_manager, prefix)
         
         if zip_filepath:
+            backup_filename = os.path.basename(zip_filepath)
+            self.backup_created.emit(self.task_type, backup_filename, f"{self.task_type} 备份完成")
             self.finished.emit(True, f"{self.task_type} 备份完成")
         else:
             self.finished.emit(False, "本地 ZIP 创建失败")
@@ -180,6 +184,9 @@ class BackupManager(QObject):
         self.last_snapshot_check_time = datetime.now()
         
         self._current_worker = None
+        self._latest_backup_filename = None
+        self._latest_backup_type = None
+
 
     def _start_worker(self, task_type, snapshot_data=None):
         if self._current_worker and self._current_worker.isRunning():
@@ -190,6 +197,7 @@ class BackupManager(QObject):
         self._current_worker.snapshot_data = snapshot_data
         self._current_worker.log.connect(self.log_message.emit)
         self._current_worker.finished.connect(self._on_worker_finished)
+        self._current_worker.backup_created.connect(self._on_backup_created)
         self._current_worker.start()
 
     def _on_worker_finished(self, success, message):
@@ -200,6 +208,14 @@ class BackupManager(QObject):
             self.log_message.emit(f"备份任务结束: {message}")
         
         self._cleanup_local_backups()
+    
+    def _on_backup_created(self, backup_type, backup_filename, message):
+        """处理备份创建完成事件"""
+        self._latest_backup_filename = backup_filename
+        self._latest_backup_type = backup_type
+        self.log_message.emit(f"备份文件已创建: {backup_filename}")
+    
+
 
     def create_stage_point_backup(self):
         self.log_message.emit("开始阶段点备份 (后台运行)...")
@@ -280,6 +296,19 @@ class BackupManager(QObject):
                     zipf.extractall(temp_dir)
                 
                 self.log_message.emit(f"正在从 {backup_info['type']} 备份 '{backup_info['file']}' 恢复...")
+                
+                # 备份当前数据库文件，防止恢复失败导致数据丢失
+                # 备份文件放在同一目录，使用 .backup 后缀
+                db_files_to_backup = [DB_FILE, DB_FILE + '-shm', DB_FILE + '-wal']
+                backed_up_files = []
+                for db_file in db_files_to_backup:
+                    if os.path.exists(db_file):
+                        backup_file = db_file + '.backup'
+                        shutil.copy2(db_file, backup_file)
+                        backed_up_files.append((db_file, backup_file))
+                        self.log_message.emit(f"已备份数据库文件: {os.path.basename(db_file)} -> {os.path.basename(backup_file)}")
+                
+                self.log_message.emit("正在清空本地数据库...")
                 self.data_manager.clear_all_writing_data()
                 self.log_message.emit("本地数据库已清空，准备写入备份数据...")
 
@@ -339,7 +368,25 @@ class BackupManager(QObject):
             self.log_message.emit("数据库恢复成功。请重启应用以刷新界面。")
             return True
         except Exception as e:
+            # 恢复失败，尝试恢复备份的数据库文件
             self.log_message.emit(f"恢复失败: {e}")
+            if 'backed_up_files' in locals() and backed_up_files:
+                self.log_message.emit("正在恢复备份的数据库文件...")
+                restore_success = True
+                for original_file, backup_file in backed_up_files:
+                    try:
+                        shutil.copy2(backup_file, original_file)
+                        self.log_message.emit(f"已恢复数据库文件: {os.path.basename(original_file)}")
+                    except Exception as restore_error:
+                        self.log_message.emit(f"恢复数据库文件 {os.path.basename(original_file)} 失败: {restore_error}")
+                        restore_success = False
+                if restore_success:
+                    self.log_message.emit("数据库文件已恢复至恢复前的状态。")
+                else:
+                    self.log_message.emit("警告：部分数据库文件恢复失败，数据可能不一致。")
+            else:
+                self.log_message.emit("警告：没有可用的数据库备份文件，数据可能已丢失。")
+            
             import traceback
             traceback.print_exc()
             return False

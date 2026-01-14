@@ -1,8 +1,11 @@
 # ShiCheng_Writer/widgets/editor.py
+import logging
 from PySide6.QtWidgets import QTextEdit, QApplication
 from PySide6.QtGui import (QSyntaxHighlighter, QTextCharFormat, QColor, QFont, 
                            QTextBlockFormat, QTextCursor, QTextDocument) 
 from PySide6.QtCore import QRegularExpression, Qt
+
+logger = logging.getLogger(__name__)
 
 class MaterialHighlighter(QSyntaxHighlighter):
     """素材高亮器 - 性能优化版"""
@@ -86,7 +89,7 @@ class Editor(QTextEdit):
             self.set_line_height(150)
             
         except ValueError:
-            print(f"无效的字体大小: {size_str}")
+            logger.warning(f"无效的字体大小: {size_str}")
 
     def set_line_height(self, percentage):
         """设置行高百分比"""

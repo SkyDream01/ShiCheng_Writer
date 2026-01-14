@@ -5,16 +5,18 @@ import json
 from datetime import datetime
 import threading
 import hashlib
-from .utils import get_app_root 
+import logging
+from .utils import get_app_root
 
 DB_FILE = os.path.join(get_app_root(), "ShiCheng_Writer.db")
+logger = logging.getLogger(__name__)
 
 def calculate_hash(content):
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
 def get_db_connection():
     """获取数据库连接"""
-    conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+    conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
@@ -158,10 +160,11 @@ class DataManager:
         self.lock = threading.Lock()
 
     def get_preference(self, key, default=None):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT value FROM preferences WHERE key = ?", (key,))
-        row = cursor.fetchone()
-        return row['value'] if row else default
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT value FROM preferences WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row['value'] if row else default
 
     def set_preference(self, key, value):
         with self.lock:
@@ -169,27 +172,38 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
 
+
     def get_books_and_groups(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM books ORDER BY `group`, title")
-        books_by_group = {}
-        for book in cursor.fetchall():
-            group = book['group'] if book['group'] else "未分组"
-            if group not in books_by_group:
-                books_by_group[group] = []
-            books_by_group[group].append(dict(book))
-        return books_by_group
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM books ORDER BY `group`, title")
+            books_by_group = {}
+            for book in cursor.fetchall():
+                group = book['group'] if book['group'] else "未分组"
+                if group not in books_by_group:
+                    books_by_group[group] = []
+                books_by_group[group].append(dict(book))
+            return books_by_group
 
     def get_all_books(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM books")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM books")
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_book_details(self, book_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_book_word_count(self, book_id):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT SUM(word_count) as total FROM chapters WHERE book_id = ?", (book_id,))
+            result = cursor.fetchone()
+            return result['total'] if result and result['total'] is not None else 0
 
     def add_book(self, title, description="", cover_path="", group=""):
         with self.lock:
@@ -245,24 +259,34 @@ class DataManager:
                 cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
     def get_chapters_for_book(self, book_id):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash 
-            FROM chapters WHERE book_id = ? ORDER BY volume, id
-        """, (book_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash 
+                FROM chapters WHERE book_id = ? ORDER BY volume, id
+            """, (book_id,))
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_chapter_details(self, chapter_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,))
-        row = cursor.fetchone()
-        return dict(row) if row else None
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     def get_chapter_content(self, chapter_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT content, word_count FROM chapters WHERE id = ?", (chapter_id,))
-        result = cursor.fetchone()
-        return (result['content'], result['word_count']) if result else ("", 0)
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT content, word_count FROM chapters WHERE id = ?", (chapter_id,))
+            result = cursor.fetchone()
+            return (result['content'], result['word_count']) if result else ("", 0)
+
+    def get_chapter_info(self, chapter_id):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash FROM chapters WHERE id = ?", (chapter_id,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
 
     def add_chapter(self, book_id, volume, title):
         with self.lock:
@@ -345,9 +369,10 @@ class DataManager:
                             (new_volume_name, book_id, old_volume_name))
 
     def get_recycle_bin_items(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM recycle_bin ORDER BY deleted_at DESC")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM recycle_bin ORDER BY deleted_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
 
     def restore_recycle_item(self, recycle_id):
         with self.lock:
@@ -414,43 +439,47 @@ class DataManager:
                 cursor.execute("DELETE FROM recycle_bin")
 
     def get_all_materials_names(self, book_id=None):
-        cursor = self.conn.cursor()
-        if book_id:
-            cursor.execute("SELECT name FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
-        else:
-            cursor.execute("SELECT name FROM materials WHERE book_id IS NULL")
-        return [row['name'] for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            if book_id:
+                cursor.execute("SELECT name FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
+            else:
+                cursor.execute("SELECT name FROM materials WHERE book_id IS NULL")
+            return [row['name'] for row in cursor.fetchall()]
 
     def get_materials(self, book_id=None):
-        cursor = self.conn.cursor()
-        if book_id:
-             cursor.execute("SELECT * FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
-        else:
-             cursor.execute("SELECT * FROM materials WHERE book_id IS NULL")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            if book_id:
+                cursor.execute("SELECT * FROM materials WHERE book_id IS NULL OR book_id = ?", (book_id,))
+            else:
+                cursor.execute("SELECT * FROM materials WHERE book_id IS NULL")
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_all_materials(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM materials")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM materials")
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_material_details(self, material_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        
-        material_data = dict(row)
-        if material_data['content']:
-            try:
-                material_data['content'] = json.loads(material_data['content'])
-            except (json.JSONDecodeError, TypeError):
-                material_data['content'] = {'value': material_data['content']}
-        else:
-            material_data['content'] = {}
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
             
-        return material_data
+            material_data = dict(row)
+            if material_data['content']:
+                try:
+                    material_data['content'] = json.loads(material_data['content'])
+                except (json.JSONDecodeError, TypeError):
+                    material_data['content'] = {'value': material_data['content']}
+            else:
+                material_data['content'] = {}
+                
+            return material_data
 
     def add_material(self, name, type, description, book_id=None, content=None):
         try:
@@ -462,7 +491,7 @@ class DataManager:
                                 (name, type, description, book_id, content_json))
                     return cursor.lastrowid
         except sqlite3.IntegrityError:
-            print(f"添加素材 '{name}' 失败：名称已存在。")
+            logger.warning(f"添加素材 '{name}' 失败：名称已存在。")
             return None
 
     def add_material_from_backup(self, material_data):
@@ -486,7 +515,7 @@ class DataManager:
                     """, (name, type, description, content_json, material_id))
                     return True
         except Exception as e:
-            print(f"数据库更新素材失败: {e}")
+            logger.error(f"数据库更新素材失败: {e}")
             return False
 
     def delete_material(self, material_id):
@@ -497,13 +526,20 @@ class DataManager:
                     cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
                     return True
         except Exception as e:
-            print(f"删除素材失败: {e}")
+            logger.error(f"删除素材失败: {e}")
             return False
 
     def get_all_groups(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT `group` FROM books WHERE `group` IS NOT NULL AND `group` != '' ORDER BY `group`")
-        return [row['group'] for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT DISTINCT `group` FROM books WHERE `group` IS NOT NULL AND `group` != '' ORDER BY `group`")
+            return [row['group'] for row in cursor.fetchall()]
+
+    def get_books_by_group(self, group_name):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM books WHERE `group` = ? ORDER BY title", (group_name,))
+            return [dict(row) for row in cursor.fetchall()]
 
     def rename_group(self, old_name, new_name):
         with self.lock:
@@ -520,14 +556,16 @@ class DataManager:
                 return cursor.rowcount > 0
 
     def get_inspiration_fragments(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM inspiration_fragments ORDER BY created_at DESC")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM inspiration_fragments ORDER BY created_at DESC")
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_all_inspiration_fragments(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM inspiration_fragments")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM inspiration_fragments")
+            return [dict(row) for row in cursor.fetchall()]
 
     def add_inspiration_fragment(self, type, content, source=""):
         with self.lock:
@@ -546,14 +584,16 @@ class DataManager:
                                 fragment_data.get('source', ''), fragment_data.get('created_at')))
 
     def get_inspiration_items(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM inspiration_items ORDER BY parent_id, title")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM inspiration_items ORDER BY parent_id, title")
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_all_inspiration_items(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM inspiration_items")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM inspiration_items")
+            return [dict(row) for row in cursor.fetchall()]
 
     def add_inspiration_item(self, title, content="", tags="", parent_id=None):
         with self.lock:
@@ -572,14 +612,16 @@ class DataManager:
                                 item_data.get('tags', ''), item_data.get('parent_id')))
 
     def get_timelines_for_book(self, book_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM timelines WHERE book_id = ? ORDER BY name", (book_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM timelines WHERE book_id = ? ORDER BY name", (book_id,))
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_all_timelines(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM timelines")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM timelines")
+            return [dict(row) for row in cursor.fetchall()]
 
     def add_timeline(self, book_id, name, description=""):
         with self.lock:
@@ -598,14 +640,16 @@ class DataManager:
                                 timeline_data.get('description', '')))
 
     def get_timeline_events(self, timeline_id):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM timeline_events WHERE timeline_id = ? ORDER BY order_index", (timeline_id,))
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM timeline_events WHERE timeline_id = ? ORDER BY order_index", (timeline_id,))
+            return [dict(row) for row in cursor.fetchall()]
 
     def get_all_timeline_events(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM timeline_events")
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM timeline_events")
+            return [dict(row) for row in cursor.fetchall()]
 
     def add_timeline_event_from_backup(self, event_data):
         with self.lock:
@@ -661,16 +705,30 @@ class DataManager:
                 cursor.execute("DELETE FROM inspiration_items")
                 cursor.execute("DELETE FROM inspiration_fragments")
 
+    def get_recent_chapters(self, limit=10):
+        with self.lock:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime, b.title as book_title
+                FROM chapters c
+                JOIN books b ON c.book_id = b.id
+                WHERE c.lastEditTime IS NOT NULL
+                ORDER BY c.lastEditTime DESC
+                LIMIT ?
+            """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_chapters_modified_since(self, check_time):
-        check_timestamp_ms = int(check_time.timestamp() * 1000)
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime, b.title as book_title
-            FROM chapters c
-            JOIN books b ON c.book_id = b.id
-            WHERE c.lastEditTime > ?
-        """, (check_timestamp_ms,))
-        return [dict(row) for row in cursor.fetchall()]
+        with self.lock:
+            check_timestamp_ms = int(check_time.timestamp() * 1000)
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime, b.title as book_title
+                FROM chapters c
+                JOIN books b ON c.book_id = b.id
+                WHERE c.lastEditTime > ?
+            """, (check_timestamp_ms,))
+            return [dict(row) for row in cursor.fetchall()]
 
     def close(self):
         if self.conn:

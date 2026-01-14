@@ -2,13 +2,16 @@
 import os
 import tempfile
 import json
+import logging
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
                                QLabel, QLineEdit, QCheckBox, QComboBox, 
                                QDialogButtonBox, QPushButton, QMessageBox, 
                                QTreeWidget, QTreeWidgetItem, QHeaderView, 
                                QListWidget, QInputDialog, QTextEdit, QApplication,
                                QGridLayout)
-from PySide6.QtCore import Qt, QThread, Signal 
+from PySide6.QtCore import Qt, QThread, Signal
+
+logger = logging.getLogger(__name__)
 
 # --- 查找与替换对话框 (保持不变) ---
 class SearchReplaceDialog(QDialog):
@@ -177,7 +180,7 @@ class RecycleBinDialog(QDialog):
                 tree_item.setText(3, origin)
                 tree_item.setData(0, Qt.UserRole, item['id'])
             except Exception as e:
-                print(f"加载回收站项目失败: {e}")
+                logger.error(f"加载回收站项目失败: {e}")
                 continue
             
     def restore_item(self):
@@ -251,17 +254,22 @@ class BackupDialog(QDialog):
     def load_backups(self):
         self.backup_tree.clear()
         
-        # Local Backups
+        has_backups = False
+        
+        # 本地备份
         local_backups = self.backup_manager.list_backups()
         if local_backups:
+            has_backups = True
             local_root = QTreeWidgetItem(self.backup_tree, ["本地备份"])
             for backup in local_backups:
                 backup['source'] = 'local'
                 child = QTreeWidgetItem(local_root, [backup['file'], backup['type'], "本地"])
                 child.setData(0, Qt.UserRole, backup)
             local_root.setExpanded(True)
+        
 
-        if not local_backups:
+        
+        if not has_backups:
             self.backup_tree.addTopLevelItem(QTreeWidgetItem(["暂无任何备份文件"]))
 
     def restore_backup(self):
@@ -271,7 +279,10 @@ class BackupDialog(QDialog):
             return
             
         backup_info = selected_item.data(0, Qt.UserRole)
+        
+        # 直接进行本地恢复
         self.proceed_with_restore(backup_info)
+
 
     def proceed_with_restore(self, backup_info):
         backup_type_lower = backup_info.get('type', '').lower()
@@ -307,18 +318,21 @@ class BackupDialog(QDialog):
             return
 
         backup_info = selected_item.data(0, Qt.UserRole)
+        
+        message = f"确定要永久删除此本地备份吗？\n'{backup_info['file']}'"
 
-        reply = QMessageBox.question(self, "确认删除",
-                                       f"确定要永久删除此本地备份吗？\n'{backup_info['file']}'",
+        reply = QMessageBox.question(self, "确认删除", message,
                                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
 
         if reply == QMessageBox.Yes:
             success = self.backup_manager.delete_backup(backup_info)
+            
             if success:
-                QMessageBox.information(self, "成功", f"备份 '{backup_info['file']}' 已被删除。")
+                QMessageBox.information(self, "成功", f"本地备份 '{backup_info['file']}' 已被删除。")
                 self.load_backups()
             else:
                 QMessageBox.critical(self, "失败", "删除过程中发生错误。")
+    
 
 
 class ManageGroupsDialog(QDialog):
@@ -421,3 +435,4 @@ class EditBookDialog(QDialog):
             "cover_path": self.cover_edit.text(),
             "group": self.group_edit.text()
         }
+
