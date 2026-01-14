@@ -965,9 +965,17 @@ class MainWindow(QMainWindow):
             for child_row in range(parent_item.rowCount()):
                 child_item = parent_item.child(child_row)
                 if child_item and child_item.data(Qt.UserRole) == chapter_id:
-                    index = self.chapter_model.indexFromItem(child_item)
-                    self.chapter_tree.setCurrentIndex(index)
-                    if force_select: self.on_chapter_selected(index)
+                    source_index = self.chapter_model.indexFromItem(child_item)
+                    
+                    # [修复] 将源模型索引转换为代理模型索引
+                    if hasattr(self, 'chapter_proxy_model'):
+                        proxy_index = self.chapter_proxy_model.mapFromSource(source_index)
+                    else:
+                        proxy_index = source_index
+                        
+                    # 视图和槽函数都需要代理索引
+                    self.chapter_tree.setCurrentIndex(proxy_index)
+                    if force_select: self.on_chapter_selected(proxy_index)
                     return
                     
     def save_current_chapter(self):
