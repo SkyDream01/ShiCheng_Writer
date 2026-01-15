@@ -15,6 +15,11 @@ class MaterialHighlighter(QSyntaxHighlighter):
         
         self.highlight_format = QTextCharFormat()
         self.update_highlight_color()
+        
+        # 缓存优化
+        self._current_materials_hash = None
+        self._cached_pattern = None
+        self._cached_materials_list = None
 
     def update_highlight_color(self):
         palette = QApplication.instance().palette()
@@ -35,20 +40,41 @@ class MaterialHighlighter(QSyntaxHighlighter):
         self.rehighlight()
 
     def set_materials_list(self, materials_list):
+        # 检查材料列表是否实际发生变化
+        if materials_list is None:
+            materials_list = []
+        
+        # 计算当前列表的哈希
+        sorted_list = sorted(materials_list)
+        new_hash = hash(tuple(sorted_list))
+        
+        # 如果哈希相同且列表内容相同，跳过更新
+        if (self._current_materials_hash == new_hash and 
+            self._cached_materials_list == sorted_list):
+            return
+        
         self.highlighting_rules = []
         if not materials_list:
+            self._current_materials_hash = None
+            self._cached_pattern = None
+            self._cached_materials_list = None
             self.rehighlight()
             return
         
         # 1. 按长度降序排序，防止短词覆盖长词
-        sorted_list = sorted(materials_list, key=len, reverse=True)
+        sorted_by_length = sorted(materials_list, key=len, reverse=True)
 
         # 2. [核心优化] 将所有关键词合并为一个正则表达式进行一次性匹配
-        escaped_list = [QRegularExpression.escape(m) for m in sorted_list]
+        escaped_list = [QRegularExpression.escape(m) for m in sorted_by_length]
         pattern_str = f"\\b({'|'.join(escaped_list)})\\b"
         
         pattern = QRegularExpression(pattern_str)
         self.highlighting_rules.append((pattern, self.highlight_format))
+        
+        # 更新缓存
+        self._current_materials_hash = new_hash
+        self._cached_pattern = pattern
+        self._cached_materials_list = sorted_list
         
         self.rehighlight()
 

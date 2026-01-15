@@ -54,6 +54,19 @@ class MainWindow(QMainWindow):
         # 连接备份完成信号，显示最终状态
         self.backup_manager.backup_finished.connect(self.on_backup_finished)
 
+        # 定时器初始化（在UI设置之前，避免信号触发时定时器不存在）
+        self.typing_timer = QTimer(self)
+        self.typing_timer.setInterval(5000)
+        self.typing_timer.timeout.connect(self.update_typing_speed)
+        self.last_char_count = 0
+        self.typing_speed = 0
+        
+        # 字数统计节流定时器
+        self.wordcount_timer = QTimer(self)
+        self.wordcount_timer.setSingleShot(True)
+        self.wordcount_timer.setInterval(300)  # 300毫秒延迟
+        self.wordcount_timer.timeout.connect(self._update_word_count_deferred)
+
         self.setup_ui()
         self.setup_actions()
         self.setup_menu_bar()
@@ -71,11 +84,6 @@ class MainWindow(QMainWindow):
         # 初始化时启动自动保存
         self.setup_autosave()
 
-        self.typing_timer = QTimer(self)
-        self.typing_timer.setInterval(5000)
-        self.typing_timer.timeout.connect(self.update_typing_speed)
-        self.last_char_count = 0
-        self.typing_speed = 0
     
     def show_status_message(self, message):
         self.statusBar().showMessage(message, 5000)
@@ -1015,13 +1023,47 @@ class MainWindow(QMainWindow):
     def on_text_changed(self):
         if not self.editor.signalsBlocked():
             self.is_text_changed = True
-            content = self.editor.toPlainText()
-            count = len(content.strip())
-            self.update_word_count_label(count)
-            # 添加星号表示未保存
+            # 添加星号表示未保存（立即反馈）
             current_text = self.word_count_label.text()
             if not current_text.endswith('*'):
                 self.word_count_label.setText(current_text + '*')
+            # 延迟字数统计计算（节流）
+            # 确保wordcount_timer存在
+            if not hasattr(self, 'wordcount_timer'):
+                self.wordcount_timer = QTimer(self)
+                self.wordcount_timer.setSingleShot(True)
+                self.wordcount_timer.setInterval(300)
+                self.wordcount_timer.timeout.connect(self._update_word_count_deferred)
+            self.wordcount_timer.start()
+
+    def _update_word_count_deferred(self):
+        """延迟更新字数统计（节流优化）"""
+        if self.editor.signalsBlocked():
+            return
+        
+        content = self.editor.toPlainText()
+        count = len(content.strip())
+        
+        # 获取当前标签文本，检查是否包含星号
+        current_text = self.word_count_label.text()
+        has_asterisk = current_text.endswith('*')
+        
+        # 更新字数统计
+        if self.current_book_id:
+            total_word_count = self.data_manager.get_book_word_count(self.current_book_id)
+            if total_word_count > 0:
+                percentage = (count / total_word_count) * 100 if total_word_count > 0 else 0
+                new_text = f"字数: {count}/{total_word_count} ({percentage:.1f}%)"
+            else:
+                new_text = f"字数: {count}"
+        else:
+            new_text = f"字数: {count}"
+        
+        # 如果原来有星号，保留星号
+        if has_asterisk and not new_text.endswith('*'):
+            new_text += '*'
+        
+        self.word_count_label.setText(new_text)
 
     def update_typing_speed(self):
         if not self.current_chapter_id:

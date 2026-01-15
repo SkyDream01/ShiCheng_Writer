@@ -81,7 +81,9 @@ def main():
 
     window.show()
 
-    sys.exit(app.exec())
+    rc = app.exec()
+    data_manager.close()
+    sys.exit(rc)
 
 if __name__ == '__main__':
     main()

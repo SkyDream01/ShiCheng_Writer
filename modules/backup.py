@@ -192,6 +192,16 @@ class BackupManager(QObject):
         if self._current_worker and self._current_worker.isRunning():
             self.log_message.emit("后台已有备份任务在运行，本次跳过。")
             return
+        
+        # 清理之前的worker（如果存在）
+        if self._current_worker:
+            try:
+                self._current_worker.log.disconnect()
+                self._current_worker.finished.disconnect()
+                self._current_worker.backup_created.disconnect()
+            except Exception as e:
+                pass  # 信号可能已断开
+            self._current_worker = None
 
         self._current_worker = BackupWorker(task_type, self.base_backup_dir)
         self._current_worker.snapshot_data = snapshot_data
@@ -245,13 +255,14 @@ class BackupManager(QObject):
 
     def _cleanup_local_backups(self):
         for prefix, limit in [("backup_snapshot_", 15), ("backup_stage_", 5), ("backup_archive_", 15)]:
-             try:
-                files = [f for f in os.listdir(self.base_backup_dir) if f.startswith(prefix)]
-                files.sort(key=lambda name: os.path.getmtime(os.path.join(self.base_backup_dir, name)), reverse=True)
-                if len(files) > limit:
-                    for f in files[limit:]:
-                        os.remove(os.path.join(self.base_backup_dir, f))
-             except: pass
+              try:
+                 files = [f for f in os.listdir(self.base_backup_dir) if f.startswith(prefix)]
+                 files.sort(key=lambda name: os.path.getmtime(os.path.join(self.base_backup_dir, name)), reverse=True)
+                 if len(files) > limit:
+                     for f in files[limit:]:
+                         os.remove(os.path.join(self.base_backup_dir, f))
+              except Exception as e: 
+                 self.log_message.emit(f"清理 {prefix} 备份失败: {e}")
 
     def list_backups(self):
         backups = []
@@ -270,7 +281,8 @@ class BackupManager(QObject):
         return backups
 
     def restore_from_snapshot(self, backup_info):
-        backup_path = os.path.join(backup_info['dir'], backup_info['file'])
+        filename = os.path.basename(backup_info['file'])
+        backup_path = os.path.join(backup_info['dir'], filename)
         if not os.path.exists(backup_path): return False
         try:
             with open(backup_path, 'r', encoding='utf-8') as f:
@@ -285,7 +297,8 @@ class BackupManager(QObject):
             return False
 
     def restore_from_backup(self, backup_info):
-        backup_path = os.path.join(backup_info['dir'], backup_info['file'])
+        filename = os.path.basename(backup_info['file'])
+        backup_path = os.path.join(backup_info['dir'], filename)
         if not os.path.exists(backup_path):
             self.log_message.emit("备份文件不存在。")
             return False
@@ -392,7 +405,8 @@ class BackupManager(QObject):
             return False
 
     def delete_backup(self, backup_info):
-        backup_path = os.path.join(backup_info['dir'], backup_info['file'])
+        filename = os.path.basename(backup_info['file'])
+        backup_path = os.path.join(backup_info['dir'], filename)
         try:
             os.remove(backup_path)
             self.log_message.emit(f"已删除备份: {backup_info['file']}")

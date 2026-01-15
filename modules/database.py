@@ -122,6 +122,16 @@ def initialize_database():
     )
     """)
 
+    # 创建性能索引
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_last_edit ON chapters(lastEditTime DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_volume ON chapters(volume)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_books_group ON books(\"group\")")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_book_id ON materials(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timelines_book_id ON timelines(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_events_timeline_id ON timeline_events(timeline_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recycle_bin_deleted_at ON recycle_bin(deleted_at DESC)")
+
     # 迁移逻辑
     try:
         cursor.execute("PRAGMA table_info(settings)")
@@ -337,6 +347,8 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",
                             (content, word_count, current_time_ms, content_hash, chapter_id))
+                if cursor.rowcount == 0:
+                    return  # 章节不存在，无需更新书籍时间戳
 
                 cursor.execute("SELECT book_id FROM chapters WHERE id = ?", (chapter_id,))
                 book_id_result = cursor.fetchone()
@@ -515,7 +527,7 @@ class DataManager:
                     """, (name, type, description, content_json, material_id))
                     return True
         except Exception as e:
-            logger.error(f"数据库更新素材失败: {e}")
+            logger.error(f"数据库更新素材失败: {e}", exc_info=True)
             return False
 
     def delete_material(self, material_id):
@@ -526,7 +538,7 @@ class DataManager:
                     cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
                     return True
         except Exception as e:
-            logger.error(f"删除素材失败: {e}")
+            logger.error(f"删除素材失败: {e}", exc_info=True)
             return False
 
     def get_all_groups(self):
@@ -583,6 +595,35 @@ class DataManager:
                             (fragment_data['id'], fragment_data['type'], fragment_data['content'],
                                 fragment_data.get('source', ''), fragment_data.get('created_at')))
 
+    def update_inspiration_fragment(self, fragment_id, type=None, content=None, source=None):
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.cursor()
+                updates = []
+                params = []
+                if type is not None:
+                    updates.append("type = ?")
+                    params.append(type)
+                if content is not None:
+                    updates.append("content = ?")
+                    params.append(content)
+                if source is not None:
+                    updates.append("source = ?")
+                    params.append(source)
+                if not updates:
+                    return False
+                params.append(fragment_id)
+                query = f"UPDATE inspiration_fragments SET {', '.join(updates)} WHERE id = ?"
+                cursor.execute(query, params)
+                return cursor.rowcount > 0
+
+    def delete_inspiration_fragment(self, fragment_id):
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM inspiration_fragments WHERE id = ?", (fragment_id,))
+                return cursor.rowcount > 0
+
     def get_inspiration_items(self):
         with self.lock:
             cursor = self.conn.cursor()
@@ -610,6 +651,38 @@ class DataManager:
                 cursor.execute("INSERT OR REPLACE INTO inspiration_items (id, title, content, tags, parent_id) VALUES (?, ?, ?, ?, ?)",
                             (item_data['id'], item_data['title'], item_data.get('content', ''),
                                 item_data.get('tags', ''), item_data.get('parent_id')))
+
+    def update_inspiration_item(self, item_id, title=None, content=None, tags=None, parent_id=None):
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.cursor()
+                updates = []
+                params = []
+                if title is not None:
+                    updates.append("title = ?")
+                    params.append(title)
+                if content is not None:
+                    updates.append("content = ?")
+                    params.append(content)
+                if tags is not None:
+                    updates.append("tags = ?")
+                    params.append(tags)
+                if parent_id is not None:
+                    updates.append("parent_id = ?")
+                    params.append(parent_id)
+                if not updates:
+                    return False
+                params.append(item_id)
+                query = f"UPDATE inspiration_items SET {', '.join(updates)} WHERE id = ?"
+                cursor.execute(query, params)
+                return cursor.rowcount > 0
+
+    def delete_inspiration_item(self, item_id):
+        with self.lock:
+            with self.conn:
+                cursor = self.conn.cursor()
+                cursor.execute("DELETE FROM inspiration_items WHERE id = ?", (item_id,))
+                return cursor.rowcount > 0
 
     def get_timelines_for_book(self, book_id):
         with self.lock:
