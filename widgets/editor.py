@@ -64,9 +64,30 @@ class MaterialHighlighter(QSyntaxHighlighter):
         # 1. 按长度降序排序，防止短词覆盖长词
         sorted_by_length = sorted(materials_list, key=len, reverse=True)
 
-        # 2. [核心优化] 将所有关键词合并为一个正则表达式进行一次性匹配
-        escaped_list = [QRegularExpression.escape(m) for m in sorted_by_length]
-        pattern_str = f"\\b({'|'.join(escaped_list)})\\b"
+        # 2. [核心优化] 分离 ASCII (需要 \b) 和 非ASCII (不需要 \b) 关键词
+        ascii_keywords = []
+        non_ascii_keywords = []
+        
+        for m in sorted_by_length:
+            if not m or not m.strip():
+                continue
+            # 简单的ASCII检测
+            if all(ord(c) < 128 for c in m):
+                ascii_keywords.append(QRegularExpression.escape(m))
+            else:
+                non_ascii_keywords.append(QRegularExpression.escape(m))
+
+        patterns_parts = []
+        if ascii_keywords:
+            patterns_parts.append(f"\\b({'|'.join(ascii_keywords)})\\b")
+        if non_ascii_keywords:
+            patterns_parts.append(f"({'|'.join(non_ascii_keywords)})")
+        
+        if not patterns_parts:
+            self.rehighlight()
+            return
+
+        pattern_str = "|".join(patterns_parts)
         
         pattern = QRegularExpression(pattern_str)
         self.highlighting_rules.append((pattern, self.highlight_format))

@@ -286,7 +286,7 @@ QTabBar::tab {
     border: none;
     border-bottom: 2px solid transparent;
     font-weight: 400;
-    min-width: 120px;
+    min-width: 60px;
 }
 
 QTabBar::tab:hover {

@@ -15,7 +15,8 @@ from PySide6.QtGui import QStandardItemModel, QStandardItem, QAction, QKeySequen
 from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal, QSortFilterProxyModel
 
 from modules.theme_manager import set_stylesheet
-from modules.database import DataManager
+from modules.database import DataManager, calculate_hash
+from modules.async_workers import LoadChapterWorker, SaveChapterWorker
 from widgets.editor import Editor
 # [新增] 导入分离出去的书籍详情页
 from widgets.book_info_page import BookInfoPage
@@ -55,6 +56,11 @@ class MainWindow(QMainWindow):
         self.backup_manager.log_message.connect(self.show_status_message)
         # 连接备份完成信号，显示最终状态
         self.backup_manager.backup_finished.connect(self.on_backup_finished)
+
+        # Async Workers
+        self.load_chapter_worker = None
+        self.save_chapter_worker = None
+        self._pending_save_hash = None
 
         # 定时器初始化（在UI设置之前，避免信号触发时定时器不存在）
         self.typing_timer = QTimer(self)
@@ -189,6 +195,7 @@ class MainWindow(QMainWindow):
 
     def create_right_panel(self):
         self.right_tabs = QTabWidget()
+        self.right_tabs.setObjectName("RightPanelTabs")
         self.material_panel = MaterialPanel(self.data_manager, self)
         self.inspiration_panel = InspirationPanel(self.data_manager, self)
         self.timeline_panel = TimelinePanel(self.data_manager, self)
@@ -537,21 +544,39 @@ class MainWindow(QMainWindow):
         self.central_stack.setCurrentIndex(1)
         
         self.current_chapter_id = chapter_id
-        content, count = self.data_manager.get_chapter_content(chapter_id)
         
-        # Get chapter details for title
-        chapter_details = self.data_manager.get_chapter_details(chapter_id)
-        chapter_title = chapter_details['title'] if chapter_details else "未知章节"
+        # [Async Load]
+        self.editor.setDisabled(True) # Prevent typing while loading
+        self.statusBar().showMessage("正在加载章节...", 0)
         
+        if self.load_chapter_worker and self.load_chapter_worker.isRunning():
+            self.load_chapter_worker.terminate()
+            self.load_chapter_worker.wait()
+            
+        self.load_chapter_worker = LoadChapterWorker(self.data_manager, chapter_id)
+        self.load_chapter_worker.finished.connect(self.on_chapter_loaded)
+        self.load_chapter_worker.error.connect(lambda msg: self.statusBar().showMessage(f"加载失败: {msg}"))
+        self.load_chapter_worker.start()
+
+    def on_chapter_loaded(self, content, count):
+        self.editor.setDisabled(False)
         self.editor.blockSignals(True)
         self.editor.setPlainText(content)
         self.editor.blockSignals(False)
         self.is_text_changed = False
         self.update_word_count_label(count)
         self.typing_speed_label.setText("速度: 0 字/分")
+        
+        # Get chapter details for title (Still sync, but fast metadata query)
+        chapter_details = self.data_manager.get_chapter_details(self.current_chapter_id)
+        chapter_title = chapter_details['title'] if chapter_details else "未知章节"
+        
         self.statusBar().showMessage(f"已打开章节: {chapter_title}", 3000)
         self.last_char_count = count
         if not self.typing_timer.isActive(): self.typing_timer.start()
+        
+        # Refresh materials highlight
+        self.refresh_editor_highlighter()
 
     def on_chapter_deleted_from_widget(self, chapter_id):
         if self.current_chapter_id == chapter_id:
@@ -702,8 +727,29 @@ class MainWindow(QMainWindow):
 
     def auto_save_check(self):
         if self.current_chapter_id and self.is_text_changed:
-            self.save_current_chapter()
-            self.statusBar().showMessage("系统已自动保存草稿", 2000)
+            # Check if already saving
+            if self.save_chapter_worker and self.save_chapter_worker.isRunning():
+                return 
+            
+            content = self.editor.toPlainText()
+            self._pending_save_hash = calculate_hash(content)
+            
+            self.save_chapter_worker = SaveChapterWorker(self.data_manager, self.current_chapter_id, content)
+            self.save_chapter_worker.finished.connect(self.on_auto_save_finished)
+            self.save_chapter_worker.start()
+
+    def on_auto_save_finished(self, success):
+        if success:
+             current_hash = calculate_hash(self.editor.toPlainText())
+             # Only reset dirty flag if content hasn't changed since save started
+             if current_hash == self._pending_save_hash:
+                 self.is_text_changed = False
+                 # Remove star from word count label
+                 current_text = self.word_count_label.text()
+                 if current_text.endswith('*'):
+                     self.word_count_label.setText(current_text[:-1])
+             
+             self.statusBar().showMessage("系统已自动保存草稿", 2000)
 
     def update_timer_interval(self, timer_name, default_interval):
         # WebDAV 功能已移除，直接使用默认间隔
