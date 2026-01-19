@@ -166,8 +166,14 @@ def initialize_database():
 class DataManager:
     """数据管理类，封装所有数据库操作"""
     def __init__(self):
-        self.conn = get_db_connection()
+        self._local = threading.local()
         self.lock = threading.Lock()
+
+    @property
+    def conn(self):
+        if not hasattr(self._local, 'connection'):
+            self._local.connection = get_db_connection()
+        return self._local.connection
 
     def get_preference(self, key, default=None):
         with self.lock:
@@ -258,14 +264,18 @@ class DataManager:
 
     def delete_book(self, book_id):
         with self.lock:
-            book_data = self.get_book_details(book_id)
-            if not book_data:
-                return
-            
             with self.conn:
+                # 获取书籍数据
                 cursor = self.conn.cursor()
+                cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return
+                book_data = dict(row)
+                
+                # 插入回收站
                 cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
-                            ('book', book_id, json.dumps(dict(book_data))))
+                            ('book', book_id, json.dumps(book_data)))
                 cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
     def get_chapters_for_book(self, book_id):
@@ -364,13 +374,16 @@ class DataManager:
 
     def delete_chapter(self, chapter_id):
         with self.lock:
-            chapter_data = self.get_chapter_details(chapter_id)
-            if not chapter_data: return
-            
             with self.conn:
                 cursor = self.conn.cursor()
+                cursor.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return
+                chapter_data = dict(row)
+                
                 cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
-                            ('chapter', chapter_id, json.dumps(dict(chapter_data))))
+                            ('chapter', chapter_id, json.dumps(chapter_data)))
                 cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
 
     def update_volume_name(self, book_id, old_volume_name, new_volume_name):
@@ -804,5 +817,6 @@ class DataManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def close(self):
-        if self.conn:
-            self.conn.close()
+        if hasattr(self._local, 'connection'):
+            self._local.connection.close()
+            del self._local.connection

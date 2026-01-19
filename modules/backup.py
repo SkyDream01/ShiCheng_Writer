@@ -4,6 +4,7 @@ import shutil
 import json
 import zipfile
 import tempfile
+import uuid
 from datetime import datetime
 from PySide6.QtCore import QObject, Signal, QThread
 
@@ -303,6 +304,10 @@ class BackupManager(QObject):
             self.log_message.emit("备份文件不存在。")
             return False
 
+        # 使用时间戳+UUID生成唯一的恢复ID，避免文件名冲突
+        restore_id = f"{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
+        backed_up_files = []
+
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 with zipfile.ZipFile(backup_path, 'r') as zipf:
@@ -310,21 +315,21 @@ class BackupManager(QObject):
                 
                 self.log_message.emit(f"正在从 {backup_info['type']} 备份 '{backup_info['file']}' 恢复...")
                 
-                # 备份当前数据库文件，防止恢复失败导致数据丢失
-                # 备份文件放在同一目录，使用 .backup 后缀
+                # 1. 备份当前数据库文件 (使用唯一文件名)
                 db_files_to_backup = [DB_FILE, DB_FILE + '-shm', DB_FILE + '-wal']
-                backed_up_files = []
                 for db_file in db_files_to_backup:
                     if os.path.exists(db_file):
-                        backup_file = db_file + '.backup'
+                        backup_file = f"{db_file}.restore_backup_{restore_id}"
                         shutil.copy2(db_file, backup_file)
                         backed_up_files.append((db_file, backup_file))
                         self.log_message.emit(f"已备份数据库文件: {os.path.basename(db_file)} -> {os.path.basename(backup_file)}")
                 
+                # 2. 清空数据库
                 self.log_message.emit("正在清空本地数据库...")
                 self.data_manager.clear_all_writing_data()
                 self.log_message.emit("本地数据库已清空，准备写入备份数据...")
 
+                # 3. 恢复数据
                 book_root_path = os.path.join(temp_dir, 'book')
                 booklist_path = os.path.join(book_root_path, 'bookList.json')
                 if os.path.exists(booklist_path):
@@ -351,7 +356,7 @@ class BackupManager(QObject):
                                                 content_data = json.load(f)
                                             self.data_manager.add_chapter_from_backup(restored_book_id, chapter_meta, content_data)
                 
-                # 恢复其他数据
+                # 恢复其他模块数据
                 materials_path = os.path.join(temp_dir, 'materials.json')
                 if not os.path.exists(materials_path): materials_path = os.path.join(temp_dir, 'settings.json')
                 if os.path.exists(materials_path):
@@ -379,20 +384,33 @@ class BackupManager(QObject):
                         for e in json.load(f): self.data_manager.add_timeline_event_from_backup(e)
 
             self.log_message.emit("数据库恢复成功。请重启应用以刷新界面。")
+            
+            # 4. 恢复成功，清理临时备份文件
+            for _, backup_file in backed_up_files:
+                try:
+                    if os.path.exists(backup_file):
+                        os.remove(backup_file)
+                except OSError:
+                    pass
+            
             return True
+
         except Exception as e:
-            # 恢复失败，尝试恢复备份的数据库文件
+            # 5. 恢复失败，执行回滚
             self.log_message.emit(f"恢复失败: {e}")
-            if 'backed_up_files' in locals() and backed_up_files:
+            
+            if backed_up_files:
                 self.log_message.emit("正在恢复备份的数据库文件...")
                 restore_success = True
                 for original_file, backup_file in backed_up_files:
                     try:
-                        shutil.copy2(backup_file, original_file)
-                        self.log_message.emit(f"已恢复数据库文件: {os.path.basename(original_file)}")
+                        if os.path.exists(backup_file):
+                            shutil.copy2(backup_file, original_file)
+                            self.log_message.emit(f"已恢复数据库文件: {os.path.basename(original_file)}")
                     except Exception as restore_error:
                         self.log_message.emit(f"恢复数据库文件 {os.path.basename(original_file)} 失败: {restore_error}")
                         restore_success = False
+                
                 if restore_success:
                     self.log_message.emit("数据库文件已恢复至恢复前的状态。")
                 else:

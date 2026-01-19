@@ -84,6 +84,17 @@ class MainWindow(QMainWindow):
         # 初始化时启动自动保存
         self.setup_autosave()
 
+    def _get_source_idx(self, index, proxy_model_attr):
+        """Helper: Map proxy index to source index"""
+        if hasattr(self, proxy_model_attr):
+            return getattr(self, proxy_model_attr).mapToSource(index)
+        return index
+
+    def _get_proxy_idx(self, source_index, proxy_model_attr):
+        """Helper: Map source index to proxy index"""
+        if hasattr(self, proxy_model_attr):
+            return getattr(self, proxy_model_attr).mapFromSource(source_index)
+        return source_index
     
     def show_status_message(self, message):
         self.statusBar().showMessage(message, 5000)
@@ -619,10 +630,7 @@ class MainWindow(QMainWindow):
 
     def on_book_selected(self, index):
         # 映射代理索引到源索引
-        if hasattr(self, 'book_proxy_model'):
-            source_index = self.book_proxy_model.mapToSource(index)
-        else:
-            source_index = index
+        source_index = self._get_source_idx(index, 'book_proxy_model')
         item = self.book_model.itemFromIndex(source_index)
         if not item or item.data(Qt.UserRole) == "group":
             return
@@ -668,10 +676,7 @@ class MainWindow(QMainWindow):
 
     def on_book_double_clicked(self, index):
         # 映射代理索引到源索引
-        if hasattr(self, 'book_proxy_model'):
-            source_index = self.book_proxy_model.mapToSource(index)
-        else:
-            source_index = index
+        source_index = self._get_source_idx(index, 'book_proxy_model')
         item = self.book_model.itemFromIndex(source_index)
         if not item:
             return
@@ -685,10 +690,7 @@ class MainWindow(QMainWindow):
         index = self.book_tree.indexAt(position)
         if not index.isValid(): return
         # 映射代理索引到源索引
-        if hasattr(self, 'book_proxy_model'):
-            source_index = self.book_proxy_model.mapToSource(index)
-        else:
-            source_index = index
+        source_index = self._get_source_idx(index, 'book_proxy_model')
         item = self.book_model.itemFromIndex(source_index)
         data = item.data(Qt.UserRole)
         menu = QMenu()
@@ -721,10 +723,7 @@ class MainWindow(QMainWindow):
         index = self.chapter_tree.indexAt(position)
         if not index.isValid(): return
         # 映射代理索引到源索引
-        if hasattr(self, 'chapter_proxy_model'):
-            source_index = self.chapter_proxy_model.mapToSource(index)
-        else:
-            source_index = index
+        source_index = self._get_source_idx(index, 'chapter_proxy_model')
         item = self.chapter_model.itemFromIndex(source_index)
         data = item.data(Qt.UserRole)
         menu = QMenu()
@@ -888,10 +887,7 @@ class MainWindow(QMainWindow):
 
     def on_chapter_selected(self, index):
         # 映射代理索引到源索引
-        if hasattr(self, 'chapter_proxy_model'):
-            source_index = self.chapter_proxy_model.mapToSource(index)
-        else:
-            source_index = index
+        source_index = self._get_source_idx(index, 'chapter_proxy_model')
         item = self.chapter_model.itemFromIndex(source_index)
         if not item or not isinstance(item.data(Qt.UserRole), int):
              return
@@ -976,10 +972,7 @@ class MainWindow(QMainWindow):
                     source_index = self.chapter_model.indexFromItem(child_item)
                     
                     # [修复] 将源模型索引转换为代理模型索引
-                    if hasattr(self, 'chapter_proxy_model'):
-                        proxy_index = self.chapter_proxy_model.mapFromSource(source_index)
-                    else:
-                        proxy_index = source_index
+                    proxy_index = self._get_proxy_idx(source_index, 'chapter_proxy_model')
                         
                     # 视图和槽函数都需要代理索引
                     self.chapter_tree.setCurrentIndex(proxy_index)

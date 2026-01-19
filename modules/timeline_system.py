@@ -109,6 +109,31 @@ class TimelineEditDialog(QDialog):
     def set_dirty(self, dirty=True):
         self.is_dirty = dirty
 
+    def _generate_unique_id(self):
+        """生成唯一的数字ID，防止快速点击时的冲突"""
+        new_id = int(time.time() * 1000)
+        
+        # 获取当前所有ID
+        existing_ids = set()
+        root = self.tree_model.invisibleRootItem()
+        
+        def traverse(parent_item):
+            for i in range(parent_item.rowCount()):
+                item = parent_item.child(i)
+                data = item.data(Qt.UserRole)
+                if data and 'id' in data:
+                    existing_ids.add(data['id'])
+                if item.hasChildren():
+                    traverse(item)
+        
+        traverse(root)
+        
+        # 确保ID唯一
+        while new_id in existing_ids:
+            new_id += 1
+            
+        return new_id
+
     def on_rows_moved(self, parent, start, end, destination, dest_row):
         """当行被拖拽移动后触发，实现编号实时更新"""
         self.update_item_numbers()
@@ -245,7 +270,7 @@ class TimelineEditDialog(QDialog):
                     parent_id = selected_item.parent().data(Qt.UserRole)['id']
 
         new_event = {
-            "id": int(time.time() * 1000), # 毫秒级时间戳作为临时ID
+            "id": self._generate_unique_id(),
             "timeline_id": self.timeline_id,
             "parent_id": parent_id,
             "title": "新事件",

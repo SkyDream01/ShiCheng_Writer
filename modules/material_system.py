@@ -328,11 +328,11 @@ class MaterialEditDialog(QDialog):
         button = self.attributes_table.cellWidget(row, 2)
         collection = button.property('collection')
         
-        items_str = ", ".join([str(item) for item in collection])
-        new_items_str, ok = QInputDialog.getText(self, "编辑集合", "输入集合项（用逗号分隔）:", text=items_str)
+        items_str = "\n".join([str(item) for item in collection])
+        new_items_str, ok = QInputDialog.getMultiLineText(self, "编辑集合", "输入集合项（每行一项）:", text=items_str)
         
         if ok:
-            new_collection = [item.strip() for item in new_items_str.split(',') if item.strip()]
+            new_collection = [item.strip() for item in new_items_str.split('\n') if item.strip()]
             button.setProperty('collection', new_collection)
             QMessageBox.information(self, "集合已更新", f"当前集合包含 {len(new_collection)} 项。")
 
