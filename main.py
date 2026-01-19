@@ -30,6 +30,14 @@ def main():
     )
     logger = logging.getLogger(__name__)
 
+    # [新增] 全局异常捕获
+    def exception_hook(exctype, value, tb):
+        logger.critical("Uncaught exception:", exc_info=(exctype, value, tb))
+        # 也可以在这里弹出一个错误对话框，通知用户程序即将崩溃
+        sys.__excepthook__(exctype, value, tb)
+
+    sys.excepthook = exception_hook
+
     # 1. 初始化数据库
     initialize_database()
 
