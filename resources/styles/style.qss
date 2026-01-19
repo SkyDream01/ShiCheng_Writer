@@ -1,20 +1,20 @@
-/* ShiCheng Writer - Material Design Light Theme */
-/* 已简化：移除 CSS 变量定义以修复解析错误 */
+/* ShiCheng Writer - Refined Material Light Theme */
+/* Optimized for readability and visual hierarchy */
 
 /* ============================
    全局样式 (Global Styles)
    ============================ */
 
 QWidget {
-    color: rgba(0, 0, 0, 0.87);
-    background-color: #F5F5F5;
-    font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+    color: #1F2937; /* Gray 900 - softer than pure black */
+    background-color: #F9FAFB; /* Gray 50 - warmer background */
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
     font-size: 14px;
     outline: none;
 }
 
 QMainWindow, QDialog {
-    background-color: #F5F5F5;
+    background-color: #F9FAFB;
 }
 
 /* ============================
@@ -24,33 +24,33 @@ QMainWindow, QDialog {
 QTreeView {
     background-color: #FFFFFF;
     border: none;
-    border-right: 1px solid #E0E0E0;
+    border-right: 1px solid #E5E7EB; /* Gray 200 */
     padding: 8px;
     border-radius: 0;
 }
 
 QTreeView::item {
-    padding: 12px 16px;
-    margin: 4px 8px;
-    border-radius: 8px;
-    color: rgba(0, 0, 0, 0.60);
+    padding: 10px 12px; /* Increased vertical padding for touch/click target */
+    margin: 2px 8px; /* Slight separation between items */
+    border-radius: 6px;
+    color: #4B5563; /* Gray 600 */
     background-color: transparent;
+    border: 1px solid transparent; /* Reserve space for border */
 }
 
 QTreeView::item:hover {
-    background-color: rgba(0, 122, 255, 0.08);
-    /* primary-500 with 8% opacity */
-    color: #007AFF;
+    background-color: #F3F4F6; /* Gray 100 */
+    color: #111827; /* Gray 900 */
 }
 
 QTreeView::item:selected {
-    background-color: rgba(0, 122, 255, 0.12);
-    /* primary-500 with 12% opacity */
+    background-color: #EFF6FF; /* Blue 50 */
     color: #007AFF;
-    font-weight: 500;
-    border-left: 3px solid #007AFF;
+    font-weight: 600;
+    border: 1px solid rgba(0, 122, 255, 0.1);
 }
 
+/* Branch indicators - minimalist */
 QTreeView::branch {
     background: transparent;
     image: none;
@@ -58,13 +58,14 @@ QTreeView::branch {
 
 /* 分组项样式 */
 QTreeView::item[data-role="group"] {
-    color: rgba(0, 0, 0, 0.60);
+    color: #9CA3AF; /* Gray 400 */
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 8px 16px;
-    margin-top: 16px;
+    letter-spacing: 0.8px;
+    padding: 12px 16px 4px 16px; /* Add top spacing visually */
+    margin-top: 8px;
+    border-bottom: 1px solid #F3F4F6;
 }
 
 /* ============================
@@ -74,9 +75,10 @@ QTreeView::item[data-role="group"] {
 QTextEdit, Editor {
     background-color: #FFFFFF;
     border: none;
-    selection-background-color: rgba(0, 122, 255, 0.3); /* primary-500 with 30% opacity */
-    color: #212121;
-    padding: 16px;
+    selection-background-color: rgba(0, 122, 255, 0.2);
+    selection-color: #1F2937;
+    color: #1F2937;
+    padding: 24px; /* More breathing room */
     border-radius: 0;
 }
 
@@ -99,63 +101,63 @@ QTextEdit:focus, Editor:focus {
 }
 
 #InfoTitle {
-    color: #212121;
-    font-size: 40px;
-    font-weight: 400;
-    /* Material Design 使用 400 而不是 600 */
+    color: #111827;
+    font-size: 36px; /* Slightly tighter */
+    font-weight: 600; /* Bolder for hierarchy */
     line-height: 1.2;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
 }
 
 #InfoMeta {
-    color: rgba(0, 0, 0, 0.60);
+    color: #6B7280; /* Gray 500 */
     font-size: 14px;
     font-weight: 400;
 }
 
 #InfoLine {
     background-color: #007AFF;
-    height: 2px;
-    border-radius: 1px;
+    height: 3px;
+    border-radius: 1.5px;
 }
 
 #InfoDescTitle {
-    color: rgba(0, 0, 0, 0.60);
+    color: #6B7280;
     font-size: 12px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.2px;
+    margin-bottom: 8px;
 }
 
 #InfoDesc {
-    background-color: transparent;
-    color: rgba(0, 0, 0, 0.87);
-    padding: 16px 24px;
-    font-size: 16px;
-    line-height: 1.6;
+    background-color: #F9FAFB;
+    color: #374151;
+    padding: 20px;
+    font-size: 15px;
+    line-height: 1.7;
     border-radius: 8px;
-    background-color: rgba(0, 0, 0, 0.02); /* 轻微背景以区分 */
+    border: 1px solid #F3F4F6;
 }
 
 /* ============================
-   滚动条 (Scrollbars)
+   滚动条 (Scrollbars) - Sleeker
    ============================ */
 
 QScrollBar:vertical {
     background: transparent;
-    width: 10px;
-    margin: 4px;
-    border-radius: 5px;
+    width: 8px;
+    margin: 0px 2px 0px 0px;
+    border-radius: 4px;
 }
 
 QScrollBar::handle:vertical {
-    background: #BDBDBD;
+    background: #D1D5DB; /* Gray 300 */
     min-height: 40px;
-    border-radius: 5px;
+    border-radius: 4px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #9E9E9E;
+    background: #9CA3AF; /* Gray 400 */
 }
 
 QScrollBar::add-line:vertical,
@@ -177,20 +179,12 @@ QScrollBar:horizontal {
    ============================ */
 
 QSplitter::handle {
-    background-color: #E0E0E0;
+    background-color: #E5E7EB;
     width: 1px;
 }
 
 QSplitter::handle:hover {
-    background-color: #64B5F6;
-}
-
-QSplitter::handle:horizontal {
-    width: 1px;
-}
-
-QSplitter::handle:vertical {
-    height: 1px;
+    background-color: #007AFF;
 }
 
 /* ============================
@@ -200,74 +194,81 @@ QSplitter::handle:vertical {
 QPushButton {
     background-color: #007AFF;
     color: #FFFFFF;
-    border: none;
-    border-radius: 4px;
-    padding: 8px 16px;
-    font-weight: 500;
+    border: 1px solid transparent;
+    border-radius: 6px; /* Softer corners */
+    padding: 8px 20px;
+    font-weight: 600;
+    font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    min-height: 36px;
-    min-width: 64px;
+    min-height: 32px;
 }
 
 QPushButton:hover {
-    background-color: #1E88E5;
+    background-color: #0069D9;
 }
 
 QPushButton:pressed {
-    background-color: #1976D2;
+    background-color: #0056B3;
+    padding-top: 9px; /* Pseudo-click effect */
+    padding-bottom: 7px;
 }
 
 QPushButton:disabled {
-    background-color: rgba(0, 0, 0, 0.12);
-    color: rgba(0, 0, 0, 0.38);
+    background-color: #E5E7EB;
+    color: #9CA3AF;
 }
 
 /* 次要按钮样式 */
 QPushButton.flat {
     background-color: transparent;
     color: #007AFF;
+    border: 1px solid transparent;
 }
 
 QPushButton.flat:hover {
-    background-color: rgba(0, 122, 255, 0.08);
+    background-color: #EFF6FF;
+    border-color: #DBEAFE;
 }
 
 QPushButton.flat:pressed {
-    background-color: rgba(0, 122, 255, 0.12);
+    background-color: #DBEAFE;
 }
 
 /* ============================
-   工具栏 & 工具按钮 (Toolbars & Tool Buttons)
+   工具栏 & 工具按钮 (Toolbars)
    ============================ */
 
 QToolBar {
     background-color: #FFFFFF;
-    border-bottom: 1px solid #E0E0E0;
-    padding: 8px 16px;
-    spacing: 8px;
+    border-bottom: 1px solid #E5E7EB;
+    padding: 6px 12px;
+    spacing: 6px;
 }
 
 QToolButton {
     background-color: transparent;
-    border: none;
-    border-radius: 4px;
-    padding: 8px;
-    color: rgba(0, 0, 0, 0.60);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 6px;
+    color: #4B5563;
 }
 
 QToolButton:hover {
-    background-color: rgba(0, 0, 0, 0.08);
+    background-color: #F3F4F6;
     color: #007AFF;
+    border-color: #E5E7EB;
 }
 
 QToolButton:pressed {
-    background-color: rgba(0, 0, 0, 0.12);
+    background-color: #E5E7EB;
+    color: #0056B3;
 }
 
 QToolButton:checked {
-    background-color: rgba(0, 122, 255, 0.12);
+    background-color: #EFF6FF;
     color: #007AFF;
+    border-color: #DBEAFE;
 }
 
 /* ============================
@@ -276,39 +277,34 @@ QToolButton:checked {
 
 QTabWidget::pane {
     border: none;
-    border-left: 1px solid #E0E0E0;
+    border-left: 1px solid #E5E7EB;
     background-color: #FFFFFF;
-    border-radius: 0;
 }
 
 QTabBar {
     background-color: transparent;
-    border-bottom: 1px solid #E0E0E0;
+    border-bottom: 1px solid #E5E7EB;
 }
 
 QTabBar::tab {
     background-color: transparent;
-    color: rgba(0, 0, 0, 0.60);
-    padding: 12px 24px;
+    color: #6B7280;
+    padding: 12px 20px;
     border: none;
     border-bottom: 2px solid transparent;
-    font-weight: 400;
-    min-width: 60px;
+    font-weight: 600;
+    font-size: 13px;
 }
 
 QTabBar::tab:hover {
     color: #007AFF;
-    background-color: rgba(0, 122, 255, 0.08);
+    background-color: #F9FAFB;
 }
 
 QTabBar::tab:selected {
     color: #007AFF;
     border-bottom: 2px solid #007AFF;
-    font-weight: 500;
-}
-
-QTabBar::tab:first-child {
-    margin-left: 8px;
+    background-color: transparent;
 }
 
 /* ============================
@@ -317,24 +313,23 @@ QTabBar::tab:first-child {
 
 QStatusBar {
     background-color: #FFFFFF;
-    border-top: 1px solid #E0E0E0;
-    color: rgba(0, 0, 0, 0.60);
-    padding: 4px 16px;
+    border-top: 1px solid #E5E7EB;
+    color: #6B7280;
+    padding: 4px 12px;
     font-size: 12px;
 }
 
-/* 状态栏中的标签 */
 QStatusBar QLabel {
     padding: 2px 8px;
     border-radius: 4px;
-    background-color: transparent;
 }
 
 /* 字数统计标签 */
 QStatusBar QLabel[wordCount="true"] {
-    background-color: rgba(0, 122, 255, 0.08);
+    background-color: #EFF6FF;
     color: #007AFF;
-    font-weight: 500;
+    font-weight: 600;
+    border: 1px solid #DBEAFE;
 }
 
 /* ============================
@@ -343,23 +338,19 @@ QStatusBar QLabel[wordCount="true"] {
 
 QMenuBar {
     background-color: #FFFFFF;
-    border-bottom: 1px solid #E0E0E0;
-    padding: 4px;
+    border-bottom: 1px solid #E5E7EB;
+    padding: 2px 6px;
 }
 
 QMenuBar::item {
-    padding: 8px 16px;
+    padding: 6px 12px;
     border-radius: 4px;
-    color: rgba(0, 0, 0, 0.60);
+    color: #374151;
 }
 
 QMenuBar::item:selected {
-    background-color: rgba(0, 122, 255, 0.08);
-    color: #007AFF;
-}
-
-QMenuBar::item:pressed {
-    background-color: rgba(0, 122, 255, 0.12);
+    background-color: #F3F4F6;
+    color: #000000;
 }
 
 /* ============================
@@ -368,32 +359,27 @@ QMenuBar::item:pressed {
 
 QMenu {
     background-color: #FFFFFF;
-    border: 1px solid #E0E0E0;
-    padding: 8px;
+    border: 1px solid #E5E7EB;
+    padding: 4px;
     border-radius: 8px;
-    /* elevation-4dp */
 }
 
 QMenu::item {
-    padding: 8px 24px;
+    padding: 8px 24px 8px 12px;
     border-radius: 4px;
-    color: rgba(0, 0, 0, 0.87);
-    min-width: 160px;
+    color: #374151;
+    min-width: 140px;
 }
 
 QMenu::item:selected {
-    background-color: rgba(0, 122, 255, 0.12);
+    background-color: #EFF6FF;
     color: #007AFF;
-}
-
-QMenu::item:disabled {
-    color: rgba(0, 0, 0, 0.38);
 }
 
 QMenu::separator {
     height: 1px;
-    background-color: #E0E0E0;
-    margin: 8px 0;
+    background-color: #E5E7EB;
+    margin: 4px 8px;
 }
 
 /* ============================
@@ -402,55 +388,39 @@ QMenu::separator {
 
 QDialog {
     background-color: #FFFFFF;
-    border-radius: 8px;
-    /* elevation-8dp */
+    border-radius: 12px;
 }
 
 QDialog QLabel {
-    color: rgba(0, 0, 0, 0.87);
-}
-
-QDialog QLineEdit,
-QDialog QTextEdit,
-QDialog QComboBox {
-    background-color: #FFFFFF;
-    border: 1px solid #E0E0E0;
-    border-radius: 4px;
-    padding: 8px 12px;
-    color: #212121;
-}
-
-QDialog QLineEdit:focus,
-QDialog QTextEdit:focus,
-QDialog QComboBox:focus {
-    border-color: #007AFF;
+    color: #374151;
 }
 
 /* ============================
-   输入框 (Line Edit)
+   输入控件 (Input Controls)
    ============================ */
 
-QLineEdit {
+QLineEdit, QTextEdit, QComboBox, QDialog QLineEdit {
     background-color: #FFFFFF;
-    border: 1px solid #E0E0E0;
-    border-radius: 4px;
+    border: 1px solid #D1D5DB;
+    border-radius: 6px;
     padding: 8px 12px;
-    color: #212121;
+    color: #111827;
     selection-background-color: rgba(0, 122, 255, 0.3);
 }
 
-QLineEdit:focus {
-    border-color: #007AFF;
+QLineEdit:hover, QComboBox:hover {
+    border-color: #9CA3AF;
 }
 
-QLineEdit:hover {
-    border-color: #64B5F6;
+QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QDialog QLineEdit:focus {
+    border-color: #007AFF;
+    background-color: #FFFFFF;
 }
 
 QLineEdit:disabled {
-    background-color: rgba(0, 0, 0, 0.04);
-    color: rgba(0, 0, 0, 0.38);
-    border-color: rgba(0, 0, 0, 0.12);
+    background-color: #F3F4F6;
+    color: #9CA3AF;
+    border-color: #E5E7EB;
 }
 
 /* ============================
@@ -459,18 +429,19 @@ QLineEdit:disabled {
 
 QCheckBox {
     spacing: 8px;
-    color: rgba(0, 0, 0, 0.87);
+    color: #374151;
 }
 
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
-    border: 2px solid #E0E0E0;
-    border-radius: 2px;
+    border: 1px solid #D1D5DB;
+    border-radius: 4px;
+    background-color: #FFFFFF;
 }
 
 QCheckBox::indicator:hover {
-    border-color: #64B5F6;
+    border-color: #007AFF;
 }
 
 QCheckBox::indicator:checked {
@@ -479,35 +450,9 @@ QCheckBox::indicator:checked {
     image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='white' d='M9.7,3.3L5,8L2.3,5.3c-0.4-0.4-1.1-0.4-1.5,0s-0.4,1.1,0,1.5l3.4,3.4c0.4,0.4,1.1,0.4,1.5,0l5.4-5.4c0.4-0.4,0.4-1.1,0-1.5S10.1,2.9,9.7,3.3z'/></svg>");
 }
 
-QCheckBox::indicator:disabled {
-    border-color: rgba(0, 0, 0, 0.26);
-}
-
-QCheckBox::indicator:checked:disabled {
-    background-color: rgba(0, 0, 0, 0.26);
-    border-color: rgba(0, 0, 0, 0.26);
-}
-
 /* ============================
    组合框 (Combo Box)
    ============================ */
-
-QComboBox {
-    background-color: #FFFFFF;
-    border: 1px solid #E0E0E0;
-    border-radius: 4px;
-    padding: 8px 12px;
-    color: #212121;
-    min-height: 36px;
-}
-
-QComboBox:hover {
-    border-color: #64B5F6;
-}
-
-QComboBox:focus {
-    border-color: #007AFF;
-}
 
 QComboBox::drop-down {
     border: none;
@@ -515,29 +460,30 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
-    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path fill='%23666666' d='M7 10l5 5 5-5z'/></svg>");
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path fill='%236B7280' d='M7 10l5 5 5-5z'/></svg>");
     width: 16px;
     height: 16px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #FFFFFF;
-    border: 1px solid #E0E0E0;
-    border-radius: 4px;
-    padding: 8px 0;
-    selection-background-color: rgba(0, 122, 255, 0.12);
+    border: 1px solid #E5E7EB;
+    border-radius: 6px;
+    padding: 4px;
+    selection-background-color: #EFF6FF;
     selection-color: #007AFF;
-    /* elevation-4dp */
+    outline: none;
 }
 
 QComboBox QAbstractItemView::item {
-    padding: 8px 16px;
-    color: rgba(0, 0, 0, 0.87);
+    padding: 8px 12px;
+    border-radius: 4px;
+    color: #374151;
 }
 
 QComboBox QAbstractItemView::item:hover {
-    background-color: rgba(0, 122, 255, 0.08);
-    color: #007AFF;
+    background-color: #F3F4F6;
+    color: #111827;
 }
 
 /* ============================
@@ -546,17 +492,17 @@ QComboBox QAbstractItemView::item:hover {
 
 QMessageBox {
     background-color: #FFFFFF;
-    border-radius: 8px;
 }
 
 QMessageBox QLabel {
-    color: rgba(0, 0, 0, 0.87);
-    padding: 16px;
+    color: #374151;
+    padding: 20px;
+    font-size: 14px;
 }
 
 QMessageBox QPushButton {
     min-width: 80px;
-    margin: 4px;
+    margin: 8px;
 }
 
 /* ============================
@@ -564,13 +510,14 @@ QMessageBox QPushButton {
    ============================ */
 
 QLineEdit[search="true"] {
-    padding-left: 32px;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path fill='%23999999' d='M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/></svg>");
+    padding-left: 34px;
+    border-radius: 18px; /* Capsule shape for search */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path fill='%239CA3AF' d='M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/></svg>");
     background-repeat: no-repeat;
-    background-position: 8px center;
+    background-position: 10px center;
 }
 
 QLineEdit[search="true"]:focus {
-    /* 已修复: w3.org2000 -> w3.org/2000 */
+    border-color: #007AFF;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24'><path fill='%23007AFF' d='M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z'/></svg>");
 }
