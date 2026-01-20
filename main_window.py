@@ -29,7 +29,7 @@ from modules.inspiration import InspirationPanel
 from modules.timeline_system import TimelinePanel
 from modules.utils import resource_path
 from modules.backup import BackupManager
-# [Removed WebDAVSettingsDialog import]
+# [移除] WebDAVSettingsDialog 导入
 from widgets.dialogs import (BackupDialog, ManageGroupsDialog, 
                              EditBookDialog, RecycleBinDialog, SearchReplaceDialog)
 
@@ -45,8 +45,8 @@ class MainWindow(QMainWindow):
         self.is_text_changed = False
         self.current_theme = initial_theme
         
-        # State managed by UIManager now, but keeping some refs if needed or refactoring UIManager to hold them
-        # UIManager holds the panel state logic now.
+        # 状态现由 UIManager 管理，保留部分引用以备需
+        # UIManager 现持有面板状态逻辑。
         
         self.setWindowTitle("诗成写作 PC版")
         self.setGeometry(100, 100, 1400, 900)
@@ -57,10 +57,12 @@ class MainWindow(QMainWindow):
         # 连接备份完成信号，显示最终状态
         self.backup_manager.backup_finished.connect(self.on_backup_finished)
 
-        # Async Workers
+        # 异步工作线程
         self.load_chapter_worker = None
         self.save_chapter_worker = None
         self._pending_save_hash = None
+        self._pending_save_content = None
+        self._has_pending_save_request = False
 
         # 定时器初始化（在UI设置之前，避免信号触发时定时器不存在）
         self.typing_timer = QTimer(self)
@@ -77,7 +79,7 @@ class MainWindow(QMainWindow):
 
         self.setup_ui()
         
-        # Initialize UI Manager and setup actions/menus
+        # 初始化 UI 管理器并设置动作/菜单
         self.ui_manager = UIManager(self)
         self.ui_manager.setup_ui_components()
         
@@ -92,7 +94,7 @@ class MainWindow(QMainWindow):
         # 初始化时启动自动保存
         self.setup_autosave()
 
-    # Stub property for compatibility if external modules access these
+    # 兼容性存根属性，供外部模块访问
     @property
     def left_panel_visible(self): return self.ui_manager.left_panel_visible
     @left_panel_visible.setter
@@ -105,13 +107,13 @@ class MainWindow(QMainWindow):
 
 
     def _get_source_idx(self, index, proxy_model_attr):
-        """Helper: Map proxy index to source index"""
+        """辅助函数：映射代理索引到源索引"""
         if hasattr(self, proxy_model_attr):
             return getattr(self, proxy_model_attr).mapToSource(index)
         return index
 
     def _get_proxy_idx(self, source_index, proxy_model_attr):
-        """Helper: Map source index to proxy index"""
+        """辅助函数：映射源索引到代理索引"""
         if hasattr(self, proxy_model_attr):
             return getattr(self, proxy_model_attr).mapFromSource(source_index)
         return source_index
@@ -144,7 +146,7 @@ class MainWindow(QMainWindow):
 
         
     def update_recent_chapters_menu(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.update_recent_chapters_menu()
     
     def create_left_panel(self):
@@ -153,14 +155,14 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        # --- 1. Book Tree Widget (Refactored) ---
+        # --- 1. 书籍树组件 (已重构) ---
         self.book_tree_widget = BookTreeWidget(self.data_manager, self)
-        # Connect signals
+        # 连接信号
         self.book_tree_widget.book_selected.connect(self.on_book_selected_from_widget)
         self.book_tree_widget.book_deleted.connect(self.on_book_deleted_from_widget)
         self.book_tree_widget.status_message_requested.connect(self.show_status_message)
         
-        # --- 2. Chapter Tree Widget (Refactored) ---
+        # --- 2. 章节树组件 (已重构) ---
         self.chapter_tree_widget = ChapterTreeWidget(self.data_manager, self)
         self.chapter_tree_widget.chapter_selected.connect(self.on_chapter_selected_from_widget)
         self.chapter_tree_widget.chapter_deleted.connect(self.on_chapter_deleted_from_widget)
@@ -208,12 +210,12 @@ class MainWindow(QMainWindow):
     def setup_actions(self):
         self.add_book_action = QAction("新建书籍", self)
         self.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
-        # [Refactor] Use BookTreeWidget's method
+        # [重构] 使用 BookTreeWidget 的方法
         self.add_book_action.triggered.connect(self.book_tree_widget.add_new_book)
 
         self.add_chapter_action = QAction("新建章节", self)
         self.add_chapter_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
-        # [Refactor] Use ChapterTreeWidget's method
+        # [重构] 使用 ChapterTreeWidget 的方法
         self.add_chapter_action.triggered.connect(self.chapter_tree_widget.add_new_chapter)
         self.add_chapter_action.setEnabled(False)
 
@@ -322,7 +324,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.toggle_right_panel_action)
         view_menu.addAction(self.toggle_focus_mode_action)
 
-    # [Removed open_webdav_settings method]
+    # [移除] open_webdav_settings 方法
     
     def update_recent_chapters_menu(self):
         # 清空菜单
@@ -356,15 +358,15 @@ class MainWindow(QMainWindow):
         if self.current_book_id != book_id:
             # 找到书籍项并选中
             self.current_book_id = book_id
-            self.book_tree_widget.select_book(book_id) # Sync UI
+            self.book_tree_widget.select_book(book_id) # 同步 UI
             
-            # Manually trigger updates since select_book might not trigger signal if already selected in model but logic drifted
-            # Actually select_book just updates UI selection. We should trigger the load logic.
-            # But wait, on_book_selected_from_widget handles the logic.
-            # If I call select_book, does it trigger clicked/selectionChanged?
-            # QTreeView selection change triggers selection model signals, but my code connects to `clicked`.
-            # So programmatic selection won't trigger `clicked`.
-            # So I must call the logic manually.
+            # 手动触发更新，因为 select_book 若在模型中已选中但逻辑不同步时可能不会触发信号
+            # 实际上 select_book 仅更新 UI 选择。我们需要触发加载逻辑。
+            # 但是，on_book_selected_from_widget 处理逻辑。
+            # 如果我调用 select_book，它会触发 clicked/selectionChanged 吗？
+            # QTreeView 选择改变触发选择模型信号，但我的代码连接的是 `clicked`。
+            # 所以程序化选择不会触发 `clicked`。
+            # 因此必须手动调用逻辑。
             
             self.on_book_selected_from_widget(book_id, chapter_info['book_title'])
         
@@ -382,47 +384,47 @@ class MainWindow(QMainWindow):
     
     # [新增] 打开回收站
     def open_recycle_bin(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.open_recycle_bin()
     
     def open_find_dialog(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.open_find_dialog()
 
     def update_theme(self, new_theme):
-        # [Refactor] Logic moved to UIManager but kept here for compatibility if called externally
+        # [重构] 逻辑移至 UIManager，但为兼容性保留（若外部调用）
         self.ui_manager.update_theme_preference(new_theme)
 
     def toggle_theme(self):
         self.ui_manager.toggle_theme()
         
     def load_and_apply_font_size(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.load_and_apply_font_size()
 
     def on_font_size_changed(self, index):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.on_font_size_changed(index)
 
     def auto_indent_document(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.auto_indent_document()
 
     def auto_unindent_document(self):
-        # [Refactor] Moved to UIManager
+        # [重构] 已移动至 UIManager
         self.ui_manager.auto_unindent_document()
 
     def open_group_manager(self):
-        # [Refactor] Moved to BookTreeWidget
-        # This wrapper might still be needed if accessed from menu
+        # [重构] 已移动至 BookTreeWidget
+        # 如果从菜单访问，可能仍需要此包装器
         self.book_tree_widget.open_group_manager()
 
     def load_books(self):
-        # [Refactor] Moved to BookTreeWidget
+        # [重构] 已移动至 BookTreeWidget
         self.book_tree_widget.load_books()
 
     def filter_books(self):
-         # [Refactor] Moved to BookTreeWidget
+         # [重构] 已移动至 BookTreeWidget
          pass
 
     def filter_chapters(self):
@@ -432,13 +434,13 @@ class MainWindow(QMainWindow):
             self.chapter_tree.expandAll()  # 展开所有匹配项
 
     def on_book_selected_from_widget(self, book_id, book_title):
-        """Handle book selection signal from BookTreeWidget"""
+        """处理来自 BookTreeWidget 的书籍选择信号"""
         if self.is_text_changed:
             self.save_current_chapter()
 
         self.current_book_id = book_id
         
-        # [Refactor] Use ChapterTreeWidget to load chapters
+        # [重构] 使用 ChapterTreeWidget 加载章节
         self.chapter_tree_widget.set_book_id(book_id)
         
         self.material_panel.set_book(book_id)
@@ -448,10 +450,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"诗成写作 PC版 - {book_title}")
         self.current_book_chapter_label.setText(f"书籍: {book_title}")
         self.add_chapter_action.setEnabled(True)
-        # self.add_chapter_toolbar_action.setEnabled(True) # Toolbar is now inside widget
+        # self.add_chapter_toolbar_action.setEnabled(True) # 工具栏现位于组件内部
         self.export_action.setEnabled(True)
         
-        # Update book info page
+        # 更新书籍信息页
         book_details = self.data_manager.get_book_details(book_id)
         if book_details:
             chapters = self.data_manager.get_chapters_for_book(book_id)
@@ -462,23 +464,23 @@ class MainWindow(QMainWindow):
                 book_details.get('description', '')
             )
         
-        # Switch to info view
+        # 切换到信息视图
         self.central_stack.setCurrentIndex(0)
         
-        # Clear editor state
+        # 清除编辑器状态
         self.current_chapter_id = None
         self.editor.clear()
         self.word_count_label.setText("字数: -")
         self.typing_speed_label.setText("速度: -")
 
     def on_book_deleted_from_widget(self, book_id):
-        """Handle book deletion signal from BookTreeWidget"""
+        """处理来自 BookTreeWidget 的书籍删除信号"""
         if self.current_book_id == book_id:
             self.current_book_id = None
             self.current_chapter_id = None
             self.editor.clear()
             
-            # [Refactor] Clear chapter tree
+            # [重构] 清空章节树
             self.chapter_tree_widget.set_book_id(None)
             
             self.setWindowTitle("诗成写作 PC版")
@@ -490,11 +492,11 @@ class MainWindow(QMainWindow):
             self.central_stack.setCurrentIndex(0)
 
     def on_book_double_clicked(self, index):
-        # [Refactor] This is now handled within BookTreeWidget internally
+        # [重构] 现已在 BookTreeWidget 内部处理
         pass
 
     def open_book_menu(self, position):
-         # [Refactor] This is now handled within BookTreeWidget internally
+         # [重构] 现已在 BookTreeWidget 内部处理
          pass
 
     def open_chapter_menu(self, position):
@@ -508,7 +510,7 @@ class MainWindow(QMainWindow):
         if isinstance(data, int):
             rename_chapter_action = menu.addAction("重命名章节")
             delete_chapter_action = menu.addAction("删除章节")
-        else: # Is a volume
+        else: # 是分卷
             rename_volume_action = menu.addAction("重命名卷")
         
         action = menu.exec(self.chapter_tree.viewport().mapToGlobal(position))
@@ -527,16 +529,16 @@ class MainWindow(QMainWindow):
 
 
     def on_chapter_selected_from_widget(self, chapter_id):
-        """Handle chapter selection signal from ChapterTreeWidget"""
+        """处理来自 ChapterTreeWidget 的章节选择信号"""
         if self.is_text_changed and self.current_chapter_id != chapter_id:
             reply = QMessageBox.question(self, "保存提示", "当前章节已修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
             if reply == QMessageBox.Save: 
-                if not self.save_current_chapter(): # If save failed
-                    # Revert selection in widget to previous chapter
+                if not self.save_current_chapter(force_sync=True): # 如果保存失败
+                    # 将组件中的选择恢复为上一个章节
                     self.chapter_tree_widget.find_and_select_chapter(self.current_chapter_id, force_select=False)
                     return
             elif reply == QMessageBox.Cancel:
-                # Revert selection in widget
+                # 恢复组件中的选择
                 self.chapter_tree_widget.find_and_select_chapter(self.current_chapter_id, force_select=False)
                 return
         
@@ -545,8 +547,8 @@ class MainWindow(QMainWindow):
         
         self.current_chapter_id = chapter_id
         
-        # [Async Load]
-        self.editor.setDisabled(True) # Prevent typing while loading
+        # [异步加载]
+        self.editor.setDisabled(True) # 加载时禁止输入
         self.statusBar().showMessage("正在加载章节...", 0)
         
         if self.load_chapter_worker and self.load_chapter_worker.isRunning():
@@ -567,7 +569,7 @@ class MainWindow(QMainWindow):
         self.update_word_count_label(count)
         self.typing_speed_label.setText("速度: 0 字/分")
         
-        # Get chapter details for title (Still sync, but fast metadata query)
+        # 获取章节标题详情（仍为同步，但仅查询元数据，速度快）
         chapter_details = self.data_manager.get_chapter_details(self.current_chapter_id)
         chapter_title = chapter_details['title'] if chapter_details else "未知章节"
         
@@ -575,7 +577,7 @@ class MainWindow(QMainWindow):
         self.last_char_count = count
         if not self.typing_timer.isActive(): self.typing_timer.start()
         
-        # Refresh materials highlight
+        # 刷新素材高亮
         self.refresh_editor_highlighter()
 
     def on_chapter_deleted_from_widget(self, chapter_id):
@@ -585,30 +587,85 @@ class MainWindow(QMainWindow):
             # 章节删除后，如果没选中其他章节，可以切回书籍信息页
             self.central_stack.setCurrentIndex(0)
 
-    # Stub methods to be removed or kept as pass
+    # 存根方法，待移除或保留为 pass
 
     def find_and_select_chapter(self, chapter_id, force=False):
         self.chapter_tree_widget.find_and_select_chapter(chapter_id, force)
 
                     
-    def save_current_chapter(self):
+    def save_current_chapter(self, force_sync=False):
         if self.current_chapter_id and self.is_text_changed:
-            try:
-                content = self.editor.toPlainText()
-                self.data_manager.update_chapter_content(self.current_chapter_id, content)
-                self.is_text_changed = False
-                self.update_word_count_label(len(content.strip()))
-                self.statusBar().showMessage(f"章节已保存！", 2000)
+            content = self.editor.toPlainText()
+            
+            if force_sync:
+                # 如果有正在进行的后台保存，等待其完成以防止数据覆盖
+                if self.save_chapter_worker and self.save_chapter_worker.isRunning():
+                    self.save_chapter_worker.wait()
+                    
+                try:
+                    self.data_manager.update_chapter_content(self.current_chapter_id, content)
+                    self.is_text_changed = False
+                    self.update_word_count_label(len(content.strip()))
+                    self.statusBar().showMessage(f"章节已保存！", 2000)
+                    # 移除未保存标志
+                    current_text = self.word_count_label.text()
+                    if current_text.endswith('*'):
+                        self.word_count_label.setText(current_text[:-1])
+                    return True
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Failed to save chapter: {e}")
+                    QMessageBox.critical(self, "保存失败", f"无法保存章节内容：\n{e}")
+                    return False
+            else:
+                # 异步保存
+                self._trigger_async_save(content, is_manual=True)
                 return True
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Failed to save chapter: {e}")
-                QMessageBox.critical(self, "保存失败", f"无法保存章节内容：\n{e}")
-                return False
+                
         elif not self.is_text_changed and self.current_chapter_id:
             # 自动保存时静默处理，只有手动保存提示
             pass
         return False
+        
+    def _trigger_async_save(self, content, is_manual=False):
+        """触发异步保存，如果有正在进行的保存则排队"""
+        if self.save_chapter_worker and self.save_chapter_worker.isRunning():
+            self._pending_save_content = content
+            self._has_pending_save_request = True
+            if is_manual:
+                self.statusBar().showMessage("正在等待后台保存完成...", 0)
+            return
+
+        self._pending_save_hash = calculate_hash(content)
+        self.save_chapter_worker = SaveChapterWorker(self.data_manager, self.current_chapter_id, content)
+        self.save_chapter_worker.finished.connect(lambda success: self.on_save_finished(success, is_manual))
+        self.save_chapter_worker.start()
+        
+        if is_manual:
+             self.statusBar().showMessage("正在保存...", 0)
+
+    def on_save_finished(self, success, is_manual=False):
+        if success:
+             current_hash = calculate_hash(self.editor.toPlainText())
+             # 只有当内容没有再次改变时才清除脏标志
+             if current_hash == self._pending_save_hash:
+                 self.is_text_changed = False
+                 current_text = self.word_count_label.text()
+                 if current_text.endswith('*'):
+                     self.word_count_label.setText(current_text[:-1])
+             
+             if is_manual or self.is_text_changed: # 如果手动保存，或状态仍为脏（说明有新变动但此次保存成功），显示消息
+                self.statusBar().showMessage("保存成功", 2000)
+        else:
+             self.statusBar().showMessage("保存失败", 3000)
+             
+        # 处理排队的保存请求
+        if self._has_pending_save_request:
+            content = self._pending_save_content
+            self._pending_save_content = None
+            self._has_pending_save_request = False
+            # 递归触发下一次保存（此时worker已结束）
+            self._trigger_async_save(content, is_manual=False) # 排队的任务通常视为自动处理
             
     def refresh_editor_highlighter(self):
         if self.current_book_id:
@@ -693,7 +750,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         if self.is_text_changed:
             reply = QMessageBox.question(self, "退出提示", "当前章节有未保存的修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
-            if reply == QMessageBox.Save: self.save_current_chapter()
+            if reply == QMessageBox.Save: self.save_current_chapter(force_sync=True)
             elif reply == QMessageBox.Cancel:
                 event.ignore()
                 return
@@ -727,29 +784,8 @@ class MainWindow(QMainWindow):
 
     def auto_save_check(self):
         if self.current_chapter_id and self.is_text_changed:
-            # Check if already saving
-            if self.save_chapter_worker and self.save_chapter_worker.isRunning():
-                return 
-            
             content = self.editor.toPlainText()
-            self._pending_save_hash = calculate_hash(content)
-            
-            self.save_chapter_worker = SaveChapterWorker(self.data_manager, self.current_chapter_id, content)
-            self.save_chapter_worker.finished.connect(self.on_auto_save_finished)
-            self.save_chapter_worker.start()
-
-    def on_auto_save_finished(self, success):
-        if success:
-             current_hash = calculate_hash(self.editor.toPlainText())
-             # Only reset dirty flag if content hasn't changed since save started
-             if current_hash == self._pending_save_hash:
-                 self.is_text_changed = False
-                 # Remove star from word count label
-                 current_text = self.word_count_label.text()
-                 if current_text.endswith('*'):
-                     self.word_count_label.setText(current_text[:-1])
-             
-             self.statusBar().showMessage("系统已自动保存草稿", 2000)
+            self._trigger_async_save(content, is_manual=False)
 
     def update_timer_interval(self, timer_name, default_interval):
         # WebDAV 功能已移除，直接使用默认间隔
@@ -781,7 +817,7 @@ class MainWindow(QMainWindow):
         self.show_status_message(message)
 
     def open_backup_manager(self):
-        if self.is_text_changed: self.save_current_chapter()
+        if self.is_text_changed: self.save_current_chapter(force_sync=True)
         dialog = BackupDialog(self.backup_manager, self)
         dialog.exec()
         if dialog.result() == QDialog.Accepted:

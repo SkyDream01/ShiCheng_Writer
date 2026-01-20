@@ -820,3 +820,13 @@ class DataManager:
         if hasattr(self._local, 'connection'):
             self._local.connection.close()
             del self._local.connection
+
+    def close_local_connection(self):
+        """关闭当前线程的数据库连接"""
+        if hasattr(self._local, 'connection'):
+            try:
+                self._local.connection.close()
+            except Exception as e:
+                logger.error(f"Error closing database connection: {e}")
+            finally:
+                del self._local.connection

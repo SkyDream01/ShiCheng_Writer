@@ -10,10 +10,10 @@ from widgets.dialogs import EditBookDialog, ManageGroupsDialog
 
 class BookTreeWidget(QWidget):
     """
-    Manages the Book Tree View, Book Search, and Book CRUD operations.
+    管理书籍树状视图、书籍搜索和书籍 CRUD 操作。
     """
     
-    # Signals to communicate with MainWindow
+    # 与主窗口通信的信号
     book_selected = Signal(int, str)  # book_id, book_title
     book_deleted = Signal(int)        # book_id
     status_message_requested = Signal(str) # message
@@ -31,14 +31,14 @@ class BookTreeWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Toolbar
+        # 工具栏
         self.toolbar = QToolBar()
         self.add_book_action = QAction(QIcon(resource_path("resources/icons/add.png")), "新建书籍", self)
         self.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
         self.add_book_action.triggered.connect(self.add_new_book)
         self.toolbar.addAction(self.add_book_action)
 
-        # Search Input
+        # 搜索输入框
         search_layout = QHBoxLayout()
         search_layout.setContentsMargins(2, 2, 2, 2)
         self.search_input = QLineEdit()
@@ -49,7 +49,7 @@ class BookTreeWidget(QWidget):
         search_widget = QWidget()
         search_widget.setLayout(search_layout)
 
-        # Tree View
+        # 树状视图
         self.tree = QTreeView()
         self.tree.setHeaderHidden(True)
         self.model = QStandardItemModel()
@@ -70,14 +70,14 @@ class BookTreeWidget(QWidget):
         layout.addWidget(self.tree)
 
     def _get_source_idx(self, index):
-        """Helper: Map proxy index to source index"""
+        """辅助函数：映射代理索引到源索引"""
         return self.proxy_model.mapToSource(index)
 
     def load_books(self):
         self.model.clear()
         books_by_group = self.data_manager.get_books_and_groups()
         
-        # Keep track of expanded state? For now just expand all
+        # 记录展开状态？暂时全部展开
         for group_name, books in books_by_group.items():
             group_item = QStandardItem(group_name)
             group_item.setEditable(False)
@@ -90,7 +90,7 @@ class BookTreeWidget(QWidget):
                 group_item.appendRow(item)
         
         self.tree.expandAll()
-        self.filter_books() # Re-apply filter
+        self.filter_books() # 重新应用过滤器
 
     def filter_books(self):
         search_text = self.search_input.text()
@@ -121,7 +121,7 @@ class BookTreeWidget(QWidget):
     def open_menu(self, position):
         index = self.tree.indexAt(position)
         if not index.isValid():
-            # Clicked on whitespace, show general menu
+            # 点击空白处，显示通用菜单
             menu = QMenu()
             add_action = menu.addAction("新建书籍")
             manage_groups_action = menu.addAction("分组管理")
@@ -138,7 +138,7 @@ class BookTreeWidget(QWidget):
         data = item.data(Qt.UserRole)
         menu = QMenu()
         
-        if isinstance(data, int):  # Book
+        if isinstance(data, int):  # 书籍
             edit_action = menu.addAction("编辑书籍信息")
             set_group_action = menu.addAction("设置分组")
             export_action = menu.addAction("导出为 TXT")
@@ -151,7 +151,7 @@ class BookTreeWidget(QWidget):
             elif action == set_group_action: self.set_book_group(data)
             elif action == export_action: self.export_book(data)
             
-        else:  # Group
+        else:  # 分组
             group_name = item.text()
             new_book_action = menu.addAction("新建书籍")
             rename_group_action = menu.addAction("重命名分组")
@@ -163,7 +163,7 @@ class BookTreeWidget(QWidget):
             elif action == rename_group_action: self.rename_group(group_name)
             elif action == delete_group_action: self.delete_group(group_name)
 
-    # --- Actions ---
+    # --- 动作 ---
 
     def add_new_book(self):
         title, ok = QInputDialog.getText(self, "新建书籍", "请输入书名:")
@@ -196,7 +196,7 @@ class BookTreeWidget(QWidget):
             self.data_manager.update_book(book_id, **new_details)
             self.load_books()
             self.status_message_requested.emit(f"书籍《{new_details['title']}》信息已更新。")
-            # If this is the current book, re-emit selection to update details page
+            # 如果这是当前书籍，重新发送选择信号以更新详情页
             if self.current_book_id == book_id:
                 self.book_selected.emit(book_id, new_details['title'])
 
@@ -291,23 +291,23 @@ class BookTreeWidget(QWidget):
         dialog.exec()
 
     def select_book(self, book_id):
-        """Programmatically select a book by ID"""
-        # Iterate through model to find the item
+        """通过 ID 程序化选中书籍"""
+        # 遍历模型查找项
         for row in range(self.model.rowCount()):
             item = self.model.item(row)
             if item.data(Qt.UserRole) == "group":
-                # Check children
+                # 检查子项
                 for child_row in range(item.rowCount()):
                     child = item.child(child_row)
                     if child.data(Qt.UserRole) == book_id:
-                        # Found it
+                        # 找到了
                         index = self.model.indexFromItem(child)
                         proxy_index = self.proxy_model.mapFromSource(index)
                         self.tree.setCurrentIndex(proxy_index)
                         self.tree.scrollTo(proxy_index)
                         return
             elif item.data(Qt.UserRole) == book_id:
-                # Found it (if books are at root level, though current logic puts them in groups)
+                # 找到了（如果书籍在根级别，尽管当前逻辑将其放入分组）
                 index = self.model.indexFromItem(item)
                 proxy_index = self.proxy_model.mapFromSource(index)
                 self.tree.setCurrentIndex(proxy_index)

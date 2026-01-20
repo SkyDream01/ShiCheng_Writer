@@ -4,7 +4,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class LoadChapterWorker(QThread):
-    """Async worker to load chapter content"""
+    """加载章节内容的异步工作线程"""
     finished = Signal(object, object) # content (str), word_count (int)
     error = Signal(str)
 
@@ -15,16 +15,18 @@ class LoadChapterWorker(QThread):
 
     def run(self):
         try:
-            # Create a new connection if needed inside data_manager (thread-local handles it)
+            # 在 data_manager 内部按需创建新连接（由 thread-local 处理）
             content, word_count = self.data_manager.get_chapter_content(self.chapter_id)
             self.finished.emit(content, word_count)
         except Exception as e:
             logger.error(f"Error loading chapter {self.chapter_id}: {e}", exc_info=True)
             self.error.emit(str(e))
+        finally:
+            self.data_manager.close_local_connection()
 
 class SaveChapterWorker(QThread):
-    """Async worker to save chapter content"""
-    finished = Signal(bool) # success
+    """保存章节内容的异步工作线程"""
+    finished = Signal(bool) # 成功
     error = Signal(str)
 
     def __init__(self, data_manager, chapter_id, content):
@@ -40,3 +42,5 @@ class SaveChapterWorker(QThread):
         except Exception as e:
             logger.error(f"Error saving chapter {self.chapter_id}: {e}", exc_info=True)
             self.error.emit(str(e))
+        finally:
+            self.data_manager.close_local_connection()
