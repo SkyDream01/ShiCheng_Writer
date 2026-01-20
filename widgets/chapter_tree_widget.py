@@ -30,6 +30,12 @@ class ChapterTreeWidget(QWidget):
         
         # Toolbar
         self.toolbar = QToolBar()
+        
+        self.add_volume_action = QAction(QIcon(resource_path("resources/icons/add_volume.png")), "新建卷", self)
+        self.add_volume_action.triggered.connect(self.add_new_volume)
+        self.add_volume_action.setEnabled(False)
+        self.toolbar.addAction(self.add_volume_action)
+
         self.add_chapter_action = QAction(QIcon(resource_path("resources/icons/add_chapter.png")), "新建章节", self)
         self.add_chapter_action.triggered.connect(self.add_new_chapter)
         self.add_chapter_action.setEnabled(False) 
@@ -78,9 +84,11 @@ class ChapterTreeWidget(QWidget):
         self.current_book_id = book_id
         if book_id is not None:
             self.add_chapter_action.setEnabled(True)
+            self.add_volume_action.setEnabled(True)
             self.load_chapters_for_book(book_id)
         else:
             self.add_chapter_action.setEnabled(False)
+            self.add_volume_action.setEnabled(False)
             self.model.clear()
 
     def load_chapters_for_book(self, book_id):
@@ -142,26 +150,83 @@ class ChapterTreeWidget(QWidget):
 
     # --- Actions ---
 
+    def _get_selected_volume_name(self):
+        """Helper: Get the volume name of the currently selected item"""
+        index = self.tree.currentIndex()
+        if not index.isValid():
+            return None
+            
+        source_index = self._get_source_idx(index)
+        item = self.model.itemFromIndex(source_index)
+        
+        if not item: return None
+        
+        # Check if it's a chapter (has UserRole data) or volume
+        data = item.data(Qt.UserRole)
+        
+        if isinstance(data, int): # It's a chapter, get parent (Volume)
+            parent = item.parent()
+            if parent:
+                return parent.text()
+        else: # It's a volume (root item)
+            return item.text()
+            
+        return None
+
+    def add_new_volume(self):
+        if self.current_book_id is None:
+            QMessageBox.warning(self, "提示", "请先选择一本书籍！")
+            return
+
+        # 1. Ask for Volume Name
+        vol_name, ok = QInputDialog.getText(self, "新建卷", "请输入新卷名:")
+        if not ok or not vol_name.strip(): return
+        
+        # 2. Ask for Initial Chapter (Required by DB structure)
+        chap_title, ok = QInputDialog.getText(self, "新建章节", f"卷《{vol_name}》需要至少一个章节才能创建。\n请输入初始章节名:")
+        if not ok or not chap_title.strip(): return
+        
+        new_chapter_id = self.data_manager.add_chapter(self.current_book_id, vol_name, chap_title)
+        self.load_chapters_for_book(self.current_book_id)
+        self.find_and_select_chapter(new_chapter_id, force_select=True)
+        self.status_message_requested.emit(f"已创建新卷《{vol_name}》及章节《{chap_title}》")
+
     def add_new_chapter(self):
         if self.current_book_id is None:
             QMessageBox.warning(self, "提示", "请先选择一本书籍！")
             return
             
-        chapters = self.data_manager.get_chapters_for_book(self.current_book_id)
-        current_volumes = sorted(list({c['volume'] for c in chapters if c['volume']}))
+        # Try to intelligently determine target volume
+        target_volume = self._get_selected_volume_name()
         
-        volume, ok_vol = QInputDialog.getItem(self, "分卷", "请选择或输入分卷名：", current_volumes, 0, True)
-        if not ok_vol: return
-        if not volume: volume = "未分卷"
-        
-        title, ok_title = QInputDialog.getText(self, "新建章节", "请输入章节名:")
-        if ok_title:
-            if title and title.strip():
-                new_chapter_id = self.data_manager.add_chapter(self.current_book_id, volume, title)
-                self.load_chapters_for_book(self.current_book_id)
-                self.find_and_select_chapter(new_chapter_id, force_select=True)
-            else:
-                QMessageBox.warning(self, "警告", "章节名不能为空！")
+        if target_volume:
+            # Smart mode: Add to identified volume
+            title, ok = QInputDialog.getText(self, "新建章节", f"在卷《{target_volume}》下新建章节:\n请输入章节名:")
+            if ok:
+                if title and title.strip():
+                    new_chapter_id = self.data_manager.add_chapter(self.current_book_id, target_volume, title)
+                    self.load_chapters_for_book(self.current_book_id)
+                    self.find_and_select_chapter(new_chapter_id, force_select=True)
+                else:
+                    QMessageBox.warning(self, "警告", "章节名不能为空！")
+        else:
+            # Fallback: Ask for volume selection
+            chapters = self.data_manager.get_chapters_for_book(self.current_book_id)
+            current_volumes = sorted(list({c['volume'] for c in chapters if c['volume']}))
+            if not current_volumes: current_volumes = ["未分卷"]
+            
+            volume, ok_vol = QInputDialog.getItem(self, "分卷", "请选择分卷（或输入新卷名）：", current_volumes, 0, True)
+            if not ok_vol: return
+            if not volume: volume = "未分卷"
+            
+            title, ok_title = QInputDialog.getText(self, "新建章节", "请输入章节名:")
+            if ok_title:
+                if title and title.strip():
+                    new_chapter_id = self.data_manager.add_chapter(self.current_book_id, volume, title)
+                    self.load_chapters_for_book(self.current_book_id)
+                    self.find_and_select_chapter(new_chapter_id, force_select=True)
+                else:
+                    QMessageBox.warning(self, "警告", "章节名不能为空！")
 
     def rename_chapter(self, chapter_id):
         chapter_details = self.data_manager.get_chapter_details(chapter_id)

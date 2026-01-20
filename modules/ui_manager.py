@@ -38,6 +38,10 @@ class UIManager:
         self.mw.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
         self.mw.add_book_action.triggered.connect(self.mw.book_tree_widget.add_new_book)
 
+        self.mw.add_volume_action = QAction("新建卷", self.mw)
+        self.mw.add_volume_action.triggered.connect(self.mw.chapter_tree_widget.add_new_volume)
+        self.mw.add_volume_action.setEnabled(False)
+
         self.mw.add_chapter_action = QAction("新建章节", self.mw)
         self.mw.add_chapter_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
         self.mw.add_chapter_action.triggered.connect(self.mw.chapter_tree_widget.add_new_chapter)
@@ -98,6 +102,7 @@ class UIManager:
         # File Menu
         file_menu = menu_bar.addMenu("文件")
         file_menu.addAction(self.mw.add_book_action)
+        file_menu.addAction(self.mw.add_volume_action)
         file_menu.addAction(self.mw.add_chapter_action)
         file_menu.addSeparator()
         file_menu.addAction(self.mw.save_action)

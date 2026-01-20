@@ -206,145 +206,6 @@ class MainWindow(QMainWindow):
         self.right_tabs.addTab(self.timeline_panel, "时间轴")
         return self.right_tabs
 
-
-    def setup_actions(self):
-        self.add_book_action = QAction("新建书籍", self)
-        self.add_book_action.setShortcut(QKeySequence("Ctrl+N"))
-        # [重构] 使用 BookTreeWidget 的方法
-        self.add_book_action.triggered.connect(self.book_tree_widget.add_new_book)
-
-        self.add_chapter_action = QAction("新建章节", self)
-        self.add_chapter_action.setShortcut(QKeySequence("Ctrl+Shift+N"))
-        # [重构] 使用 ChapterTreeWidget 的方法
-        self.add_chapter_action.triggered.connect(self.chapter_tree_widget.add_new_chapter)
-        self.add_chapter_action.setEnabled(False)
-
-        self.save_action = QAction("保存", self)
-        self.save_action.setShortcut(QKeySequence("Ctrl+S"))
-        self.save_action.triggered.connect(self.save_current_chapter)
-
-        self.export_action = QAction("导出书籍", self)
-        self.export_action.setShortcut(QKeySequence("Ctrl+E"))
-        self.export_action.triggered.connect(lambda: self.export_book(self.current_book_id))
-        self.export_action.setEnabled(False)
-
-        self.undo_action = QAction("撤销", self)
-        self.undo_action.setShortcut(QKeySequence.Undo)
-        self.undo_action.triggered.connect(self.editor.undo)
-        self.editor.undoAvailable.connect(self.undo_action.setEnabled)
-
-        self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcut(QKeySequence.Redo)
-        self.redo_action.triggered.connect(self.editor.redo)
-        self.editor.redoAvailable.connect(self.redo_action.setEnabled)
-        
-        self.indent_action = QAction("全文缩进", self)
-        self.indent_action.setShortcut(QKeySequence("Ctrl+I"))
-        self.indent_action.triggered.connect(self.auto_indent_document)
-
-        self.unindent_action = QAction("取消缩进", self)
-        self.unindent_action.setShortcut(QKeySequence("Ctrl+Shift+I"))
-        self.unindent_action.triggered.connect(self.auto_unindent_document)
-
-        self.toggle_theme_action = QAction("切换亮/暗主题", self)
-        self.toggle_theme_action.setShortcut(QKeySequence("F11"))
-        self.toggle_theme_action.triggered.connect(self.toggle_theme)
-
-        self.find_action = QAction("查找与替换", self)
-        self.find_action.setShortcut(QKeySequence("Ctrl+F"))
-        self.find_action.triggered.connect(self.open_find_dialog)
-
-        # 面板控制快捷键
-        self.toggle_left_panel_action = QAction("显示/隐藏左侧面板", self)
-        self.toggle_left_panel_action.setShortcut(QKeySequence("Ctrl+1"))
-        self.toggle_left_panel_action.triggered.connect(self.toggle_left_panel)
-
-        self.toggle_right_panel_action = QAction("显示/隐藏右侧面板", self)
-        self.toggle_right_panel_action.setShortcut(QKeySequence("Ctrl+2"))
-        self.toggle_right_panel_action.triggered.connect(self.toggle_right_panel)
-
-        self.toggle_focus_mode_action = QAction("切换专注模式", self)
-        self.toggle_focus_mode_action.setShortcut(QKeySequence("Ctrl+3"))
-        self.toggle_focus_mode_action.triggered.connect(self.toggle_focus_mode)
-
-    def setup_menu_bar(self):
-        menu_bar = self.menuBar()
-
-        file_menu = menu_bar.addMenu("文件")
-        file_menu.addAction(self.add_book_action)
-        file_menu.addAction(self.add_chapter_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self.save_action)
-        file_menu.addSeparator()
-        file_menu.addAction(self.export_action)
-        file_menu.addSeparator()
-
-        group_manage_action = QAction("分组管理", self)
-        group_manage_action.triggered.connect(self.open_group_manager)
-        file_menu.addAction(group_manage_action)
-        
-        # [新增] 回收站菜单
-        recycle_bin_action = QAction("回收站", self)
-        recycle_bin_action.triggered.connect(self.open_recycle_bin)
-        file_menu.addAction(recycle_bin_action)
-
-        backup_menu = file_menu.addMenu("备份")
-        # 立即备份走线程
-        backup_now_action = QAction("立即备份 (阶段点)", self)
-        backup_now_action.triggered.connect(lambda: self.run_stage_backup(manual=True))
-        backup_menu.addAction(backup_now_action)
-
-        backup_manage_action = QAction("备份管理", self)
-        backup_manage_action.triggered.connect(self.open_backup_manager)
-        backup_menu.addAction(backup_manage_action)
-
-        # 最近编辑的章节菜单
-        recent_menu = file_menu.addMenu("最近编辑的章节")
-        self.recent_menu = recent_menu
-        recent_menu.aboutToShow.connect(self.update_recent_chapters_menu)
-
-        file_menu.addSeparator()
-        exit_action = QAction("退出", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
-
-        edit_menu = menu_bar.addMenu("编辑")
-        edit_menu.addAction(self.undo_action)
-        edit_menu.addAction(self.redo_action)
-        edit_menu.addSeparator()
-        edit_menu.addAction(self.find_action) 
-        edit_menu.addSeparator()
-        edit_menu.addAction(self.indent_action)
-        edit_menu.addAction(self.unindent_action)
-
-        view_menu = menu_bar.addMenu("视图")
-        view_menu.addAction(self.toggle_theme_action)
-        view_menu.addSeparator()
-        view_menu.addAction(self.toggle_left_panel_action)
-        view_menu.addAction(self.toggle_right_panel_action)
-        view_menu.addAction(self.toggle_focus_mode_action)
-
-    # [移除] open_webdav_settings 方法
-    
-    def update_recent_chapters_menu(self):
-        # 清空菜单
-        self.recent_menu.clear()
-        # 获取最近章节
-        recent_chapters = self.data_manager.get_recent_chapters(limit=10)
-        if not recent_chapters:
-            no_item = QAction("无最近编辑的章节", self)
-            no_item.setEnabled(False)
-            self.recent_menu.addAction(no_item)
-            return
-        
-        for chapter in recent_chapters:
-            # 格式化显示：章节名 (书籍名)
-            title = f"{chapter['title']} ({chapter['book_title']})"
-            action = QAction(title, self)
-            action.setData(chapter['id'])  # 存储章节ID
-            action.triggered.connect(lambda checked, ch_id=chapter['id']: self.open_recent_chapter(ch_id))
-            self.recent_menu.addAction(action)
-    
     def open_recent_chapter(self, chapter_id):
         # 获取章节详情并打开
         chapter_info = self.data_manager.get_chapter_info(chapter_id)
@@ -423,16 +284,6 @@ class MainWindow(QMainWindow):
         # [重构] 已移动至 BookTreeWidget
         self.book_tree_widget.load_books()
 
-    def filter_books(self):
-         # [重构] 已移动至 BookTreeWidget
-         pass
-
-    def filter_chapters(self):
-        search_text = self.chapter_search_input.text()
-        if hasattr(self, 'chapter_proxy_model'):
-            self.chapter_proxy_model.setFilterRegularExpression(search_text if search_text else "")
-            self.chapter_tree.expandAll()  # 展开所有匹配项
-
     def on_book_selected_from_widget(self, book_id, book_title):
         """处理来自 BookTreeWidget 的书籍选择信号"""
         if self.is_text_changed:
@@ -450,6 +301,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"诗成写作 PC版 - {book_title}")
         self.current_book_chapter_label.setText(f"书籍: {book_title}")
         self.add_chapter_action.setEnabled(True)
+        self.add_volume_action.setEnabled(True)
         # self.add_chapter_toolbar_action.setEnabled(True) # 工具栏现位于组件内部
         self.export_action.setEnabled(True)
         
@@ -485,48 +337,12 @@ class MainWindow(QMainWindow):
             
             self.setWindowTitle("诗成写作 PC版")
             self.add_chapter_action.setEnabled(False)
+            self.add_volume_action.setEnabled(False)
             # self.add_chapter_toolbar_action.setEnabled(False)
             self.export_action.setEnabled(False)
             
             self.book_info_page.reset()
             self.central_stack.setCurrentIndex(0)
-
-    def on_book_double_clicked(self, index):
-        # [重构] 现已在 BookTreeWidget 内部处理
-        pass
-
-    def open_book_menu(self, position):
-         # [重构] 现已在 BookTreeWidget 内部处理
-         pass
-
-    def open_chapter_menu(self, position):
-        index = self.chapter_tree.indexAt(position)
-        if not index.isValid(): return
-        # 映射代理索引到源索引
-        source_index = self._get_source_idx(index, 'chapter_proxy_model')
-        item = self.chapter_model.itemFromIndex(source_index)
-        data = item.data(Qt.UserRole)
-        menu = QMenu()
-        if isinstance(data, int):
-            rename_chapter_action = menu.addAction("重命名章节")
-            delete_chapter_action = menu.addAction("删除章节")
-        else: # 是分卷
-            rename_volume_action = menu.addAction("重命名卷")
-        
-        action = menu.exec(self.chapter_tree.viewport().mapToGlobal(position))
-        
-        if isinstance(data, int):
-            if action == rename_chapter_action: self.rename_chapter(data)
-            elif action == delete_chapter_action: self.delete_chapter(data)
-        else:
-            if action == rename_volume_action: self.rename_volume(item.text())
-
-
-    def open_group_manager(self):
-        self.book_tree_widget.open_group_manager()
-    def load_books(self):
-        self.book_tree_widget.load_books()
-
 
     def on_chapter_selected_from_widget(self, chapter_id):
         """处理来自 ChapterTreeWidget 的章节选择信号"""
