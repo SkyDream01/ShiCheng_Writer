@@ -95,15 +95,24 @@ class MainWindow(QMainWindow):
         self.setup_autosave()
 
     # 兼容性存根属性，供外部模块访问
+    # 这些属性代理到 UIManager，保持向后兼容性
     @property
-    def left_panel_visible(self): return self.ui_manager.left_panel_visible
+    def left_panel_visible(self):
+        """左侧面板可见性状态（兼容性属性）"""
+        return self.ui_manager.left_panel_visible
+
     @left_panel_visible.setter
-    def left_panel_visible(self, value): self.ui_manager.left_panel_visible = value
-    
+    def left_panel_visible(self, value):
+        self.ui_manager.left_panel_visible = value
+
     @property
-    def right_panel_visible(self): return self.ui_manager.right_panel_visible
+    def right_panel_visible(self):
+        """右侧面板可见性状态（兼容性属性）"""
+        return self.ui_manager.right_panel_visible
+
     @right_panel_visible.setter
-    def right_panel_visible(self, value): self.ui_manager.right_panel_visible = value
+    def right_panel_visible(self, value):
+        self.ui_manager.right_panel_visible = value
 
 
     def _get_source_idx(self, index, proxy_model_attr):
@@ -490,19 +499,33 @@ class MainWindow(QMainWindow):
         else:
             self.editor.update_highlighter([])
             
+    def _format_word_count_text(self, chapter_word_count, total_word_count=None):
+        """格式化字数统计文本
+        
+        Args:
+            chapter_word_count: 当前章节字数
+            total_word_count: 书籍总字数（可选）
+            
+        Returns:
+            格式化后的字数统计字符串
+        """
+        if total_word_count is not None and total_word_count > 0:
+            percentage = (chapter_word_count / total_word_count) * 100
+            return f"字数: {chapter_word_count}/{total_word_count} ({percentage:.1f}%)"
+        return f"字数: {chapter_word_count}"
+
     def update_word_count_label(self, chapter_word_count=None):
+        """更新字数统计标签"""
         if chapter_word_count is None:
             chapter_word_count = len(self.editor.toPlainText().strip())
         
+        total_word_count = None
         if self.current_book_id:
             total_word_count = self.data_manager.get_book_word_count(self.current_book_id)
-            if total_word_count > 0:
-                percentage = (chapter_word_count / total_word_count) * 100 if total_word_count > 0 else 0
-                self.word_count_label.setText(f"字数: {chapter_word_count}/{total_word_count} ({percentage:.1f}%)")
-            else:
-                self.word_count_label.setText(f"字数: {chapter_word_count}")
-        else:
-            self.word_count_label.setText(f"字数: {chapter_word_count}")
+        
+        self.word_count_label.setText(
+            self._format_word_count_text(chapter_word_count, total_word_count)
+        )
 
     def on_text_changed(self):
         if not self.editor.signalsBlocked():
@@ -533,15 +556,11 @@ class MainWindow(QMainWindow):
         has_asterisk = current_text.endswith('*')
         
         # 更新字数统计
+        total_word_count = None
         if self.current_book_id:
             total_word_count = self.data_manager.get_book_word_count(self.current_book_id)
-            if total_word_count > 0:
-                percentage = (count / total_word_count) * 100 if total_word_count > 0 else 0
-                new_text = f"字数: {count}/{total_word_count} ({percentage:.1f}%)"
-            else:
-                new_text = f"字数: {count}"
-        else:
-            new_text = f"字数: {count}"
+        
+        new_text = self._format_word_count_text(count, total_word_count)
         
         # 如果原来有星号，保留星号
         if has_asterisk and not new_text.endswith('*'):

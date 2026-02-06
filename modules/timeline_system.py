@@ -110,8 +110,10 @@ class TimelineEditDialog(QDialog):
         self.is_dirty = dirty
 
     def _generate_unique_id(self):
-        """生成唯一的数字ID，防止快速点击时的冲突"""
-        new_id = int(time.time() * 1000)
+        """生成唯一的数字ID，使用计数器确保唯一性"""
+        import itertools
+        if not hasattr(self, '_id_counter'):
+            self._id_counter = itertools.count(int(time.time() * 1000))
         
         # 获取当前所有ID
         existing_ids = set()
@@ -129,10 +131,10 @@ class TimelineEditDialog(QDialog):
         traverse(root)
         
         # 确保ID唯一
-        while new_id in existing_ids:
-            new_id += 1
-            
-        return new_id
+        while True:
+            new_id = next(self._id_counter)
+            if new_id not in existing_ids:
+                return new_id
 
     def on_rows_moved(self, parent, start, end, destination, dest_row):
         """当行被拖拽移动后触发，实现编号实时更新"""

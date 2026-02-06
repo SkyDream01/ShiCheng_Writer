@@ -40,26 +40,34 @@ class MaterialHighlighter(QSyntaxHighlighter):
         self.rehighlight()
 
     def set_materials_list(self, materials_list):
+        """设置需要高亮的素材列表
+        
+        Args:
+            materials_list: 素材名称列表
+        """
         # 检查材料列表是否实际发生变化
         if materials_list is None:
             materials_list = []
         
-        # 计算当前列表的哈希
-        sorted_list = sorted(materials_list)
-        new_hash = hash(tuple(sorted_list))
+        # 快速路径：如果列表为空，直接清除高亮
+        if not materials_list:
+            if self._current_materials_hash is not None:
+                self.highlighting_rules = []
+                self._current_materials_hash = None
+                self._cached_pattern = None
+                self._cached_materials_list = None
+                self.rehighlight()
+            return
         
-        # 如果哈希相同且列表内容相同，跳过更新
-        if (self._current_materials_hash == new_hash and 
-            self._cached_materials_list == sorted_list):
+        # 计算当前列表的哈希（使用frozenset提高性能）
+        materials_set = frozenset(materials_list)
+        new_hash = hash(materials_set)
+        
+        # 如果哈希相同，跳过更新
+        if self._current_materials_hash == new_hash:
             return
         
         self.highlighting_rules = []
-        if not materials_list:
-            self._current_materials_hash = None
-            self._cached_pattern = None
-            self._cached_materials_list = None
-            self.rehighlight()
-            return
         
         # 1. 按长度降序排序，防止短词覆盖长词
         sorted_by_length = sorted(materials_list, key=len, reverse=True)
@@ -71,8 +79,8 @@ class MaterialHighlighter(QSyntaxHighlighter):
         for m in sorted_by_length:
             if not m or not m.strip():
                 continue
-            # 简单的ASCII检测
-            if all(ord(c) < 128 for c in m):
+            # 使用str.isascii()方法（Python 3.7+）更高效
+            if m.isascii():
                 ascii_keywords.append(QRegularExpression.escape(m))
             else:
                 non_ascii_keywords.append(QRegularExpression.escape(m))
@@ -89,13 +97,15 @@ class MaterialHighlighter(QSyntaxHighlighter):
 
         pattern_str = "|".join(patterns_parts)
         
+        # 使用优化选项创建正则表达式
         pattern = QRegularExpression(pattern_str)
+        pattern.setOptimizationHints(QRegularExpression.OptimizeOnFirstUsageOption)
         self.highlighting_rules.append((pattern, self.highlight_format))
         
         # 更新缓存
         self._current_materials_hash = new_hash
         self._cached_pattern = pattern
-        self._cached_materials_list = sorted_list
+        self._cached_materials_list = sorted(materials_list)
         
         self.rehighlight()
 

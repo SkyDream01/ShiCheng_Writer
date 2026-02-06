@@ -539,7 +539,10 @@ class DataManager:
                         WHERE id = ?
                     """, (name, type, description, content_json, material_id))
                     return True
-        except Exception as e:
+        except sqlite3.IntegrityError:
+            logger.warning(f"更新素材 '{name}' 失败：名称已存在。")
+            return False
+        except sqlite3.Error as e:
             logger.error(f"数据库更新素材失败: {e}", exc_info=True)
             return False
 
@@ -550,7 +553,7 @@ class DataManager:
                     cursor = self.conn.cursor()
                     cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
                     return True
-        except Exception as e:
+        except sqlite3.Error as e:
             logger.error(f"删除素材失败: {e}", exc_info=True)
             return False
 

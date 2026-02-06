@@ -375,9 +375,17 @@ class ManageGroupsDialog(QDialog):
 
     def add_new_group(self):
         new_name, ok = QInputDialog.getText(self, "新建分组", "请输入新分组的名称:")
-        if ok and new_name:
-            self.data_manager.add_book(title="新书籍", group=new_name)
-            QMessageBox.information(self, "成功", f"分组 '{new_name}' 已创建，并已添加一本“新书籍”。")
+        if ok and new_name and new_name.strip():
+            new_name = new_name.strip()
+            # 检查分组是否已存在
+            existing_groups = self.data_manager.get_all_groups()
+            if new_name in existing_groups:
+                QMessageBox.warning(self, "提示", f"分组 '{new_name}' 已存在。")
+                return
+            # 创建空分组（通过创建一个临时书籍然后删除，或修改数据库支持空分组）
+            # 这里我们创建一个占位书籍，用户可以在分组管理器中删除它
+            self.data_manager.add_book(title="（空分组占位）", group=new_name)
+            QMessageBox.information(self, "成功", f"分组 '{new_name}' 已创建。\n提示：您可以删除占位书籍来清空分组。")
             self.load_groups()
 
     def rename_group(self):

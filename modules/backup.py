@@ -196,12 +196,7 @@ class BackupManager(QObject):
         
         # 清理之前的worker（如果存在）
         if self._current_worker:
-            try:
-                self._current_worker.log.disconnect()
-                self._current_worker.finished.disconnect()
-                self._current_worker.backup_created.disconnect()
-            except Exception as e:
-                pass  # 信号可能已断开
+            self._disconnect_worker_signals(self._current_worker)
             self._current_worker = None
 
         self._current_worker = BackupWorker(task_type, self.base_backup_dir)
@@ -210,6 +205,21 @@ class BackupManager(QObject):
         self._current_worker.finished.connect(self._on_worker_finished)
         self._current_worker.backup_created.connect(self._on_backup_created)
         self._current_worker.start()
+    
+    def _disconnect_worker_signals(self, worker):
+        """安全地断开worker的信号连接"""
+        try:
+            worker.log.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            worker.finished.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            worker.backup_created.disconnect()
+        except (RuntimeError, TypeError):
+            pass
 
     def _on_worker_finished(self, success, message):
         # [修改] 无论成功失败，都将结果转发给 backup_finished 信号
