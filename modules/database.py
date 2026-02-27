@@ -1,31 +1,58 @@
 # ShiCheng_Writer/modules/database.py
+"""
+数据库模块 - 封装 SQLite 数据库操作
+"""
 import sqlite3
 import os
 import json
-from datetime import datetime
-import threading
 import hashlib
 import logging
+import threading
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 from .utils import get_app_root
+
+# 类型别名
+DBRow = Dict[str, Any]
+DBRowOptional = Optional[DBRow]
 
 DB_FILE = os.path.join(get_app_root(), "ShiCheng_Writer.db")
 logger = logging.getLogger(__name__)
 
-def calculate_hash(content):
+
+def calculate_hash(content: str) -> str:
+    """
+    计算内容的 MD5 哈希值
+
+    Args:
+        content: 要计算哈希的字符串内容
+
+    Returns:
+        MD5 哈希值（32 位十六进制字符串）
+    """
     return hashlib.md5(content.encode('utf-8')).hexdigest()
 
-def get_db_connection():
-    """获取数据库连接"""
+
+def get_db_connection() -> sqlite3.Connection:
+    """
+    获取数据库连接
+
+    Returns:
+        SQLite 数据库连接对象
+    """
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
-def initialize_database():
-    """初始化数据库"""
+
+def initialize_database() -> None:
+    """初始化数据库，创建表和索引"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # 创建书籍表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS books (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +64,8 @@ def initialize_database():
         lastEditTime INTEGER
     )
     """)
+
+    # 创建章节表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS chapters (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,6 +80,8 @@ def initialize_database():
         FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
     )
     """)
+
+    # 创建素材表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS materials (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +94,8 @@ def initialize_database():
         UNIQUE(name, book_id)
     )
     """)
+
+    # 创建回收站表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS recycle_bin (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +105,8 @@ def initialize_database():
         deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # 创建灵感项表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS inspiration_items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +117,8 @@ def initialize_database():
         FOREIGN KEY (parent_id) REFERENCES inspiration_items (id) ON DELETE CASCADE
     )
     """)
+
+    # 创建灵感碎片表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS inspiration_fragments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,12 +128,16 @@ def initialize_database():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # 创建偏好设置表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS preferences (
         key TEXT PRIMARY KEY,
         value TEXT
     )
     """)
+
+    # 创建时间轴表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS timelines (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,6 +147,8 @@ def initialize_database():
         FOREIGN KEY (book_id) REFERENCES books (id) ON DELETE CASCADE
     )
     """)
+
+    # 创建时间轴事件表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS timeline_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -132,14 +175,15 @@ def initialize_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_events_timeline_id ON timeline_events(timeline_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_recycle_bin_deleted_at ON recycle_bin(deleted_at DESC)")
 
-    # 迁移逻辑
+    # 迁移逻辑 - 处理旧版本表结构
     try:
         cursor.execute("PRAGMA table_info(settings)")
         if cursor.fetchone():
             cursor.execute("ALTER TABLE settings RENAME TO materials")
     except sqlite3.OperationalError:
-        pass 
-        
+        pass
+
+    # 迁移 books 表，添加缺失的列
     cursor.execute("PRAGMA table_info(books)")
     columns = [row['name'] for row in cursor.fetchall()]
     if 'cover_path' not in columns:
@@ -150,7 +194,8 @@ def initialize_database():
         cursor.execute("ALTER TABLE books ADD COLUMN createTime INTEGER")
     if 'lastEditTime' not in columns:
         cursor.execute("ALTER TABLE books ADD COLUMN lastEditTime INTEGER")
-        
+
+    # 迁移 chapters 表，添加缺失的列
     cursor.execute("PRAGMA table_info(chapters)")
     columns = [row['name'] for row in cursor.fetchall()]
     if 'createTime' not in columns:
@@ -163,37 +208,62 @@ def initialize_database():
     conn.commit()
     conn.close()
 
+
 class DataManager:
     """数据管理类，封装所有数据库操作"""
-    def __init__(self):
+
+    def __init__(self) -> None:
         self._local = threading.local()
         self.lock = threading.Lock()
 
     @property
-    def conn(self):
+    def conn(self) -> sqlite3.Connection:
+        """获取当前线程的数据库连接"""
         if not hasattr(self._local, 'connection'):
             self._local.connection = get_db_connection()
         return self._local.connection
 
-    def get_preference(self, key, default=None):
+    def get_preference(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """
+        获取偏好设置
+
+        Args:
+            key: 偏好设置的键
+            default: 默认值
+
+        Returns:
+            偏好设置的值，不存在则返回默认值
+        """
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT value FROM preferences WHERE key = ?", (key,))
             row = cursor.fetchone()
             return row['value'] if row else default
 
-    def set_preference(self, key, value):
+    def set_preference(self, key: str, value: str) -> None:
+        """
+        设置偏好设置
+
+        Args:
+            key: 偏好设置的键
+            value: 偏好设置的值
+        """
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?)", (key, value))
 
+    def get_books_and_groups(self) -> Dict[str, List[DBRow]]:
+        """
+        获取按分组组织的书籍列表
 
-    def get_books_and_groups(self):
+        Returns:
+            以分组名为键、书籍列表为值的字典
+        """
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM books ORDER BY `group`, title")
-            books_by_group = {}
+            books_by_group: Dict[str, List[DBRow]] = {}
             for book in cursor.fetchall():
                 group = book['group'] if book['group'] else "未分组"
                 if group not in books_by_group:
@@ -201,27 +271,31 @@ class DataManager:
                 books_by_group[group].append(dict(book))
             return books_by_group
 
-    def get_all_books(self):
+    def get_all_books(self) -> List[DBRow]:
+        """获取所有书籍"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM books")
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_book_details(self, book_id):
+    def get_book_details(self, book_id: int) -> DBRowOptional:
+        """获取书籍详情"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_book_word_count(self, book_id):
+    def get_book_word_count(self, book_id: int) -> int:
+        """获取书籍总字数"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT SUM(word_count) as total FROM chapters WHERE book_id = ?", (book_id,))
             result = cursor.fetchone()
             return result['total'] if result and result['total'] is not None else 0
 
-    def add_book(self, title, description="", cover_path="", group=""):
+    def add_book(self, title: str, description: str = "", cover_path: str = "", group: str = "") -> int:
+        """添加新书籍"""
         with self.lock:
             with self.conn:
                 current_time = int(datetime.now().timestamp() * 1000)
@@ -232,7 +306,8 @@ class DataManager:
                     """, (title, description, cover_path, group, current_time, current_time))
                 return cursor.lastrowid
 
-    def add_book_from_backup(self, book_data):
+    def add_book_from_backup(self, book_data: DBRow) -> int:
+        """从备份数据添加书籍"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -252,7 +327,8 @@ class DataManager:
                     return cursor.lastrowid
                 return backup_id
 
-    def update_book(self, book_id, title, description, cover_path, group):
+    def update_book(self, book_id: int, title: str, description: str, cover_path: str, group: str) -> None:
+        """更新书籍信息"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -262,72 +338,78 @@ class DataManager:
                     WHERE id = ?
                 """, (title, description, cover_path, group, book_id))
 
-    def delete_book(self, book_id):
+    def delete_book(self, book_id: int) -> None:
+        """删除书籍（移入回收站）"""
         with self.lock:
             with self.conn:
-                # 获取书籍数据
                 cursor = self.conn.cursor()
                 cursor.execute("SELECT * FROM books WHERE id = ?", (book_id,))
                 row = cursor.fetchone()
                 if not row:
                     return
                 book_data = dict(row)
-                
+
                 # 插入回收站
                 cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
                             ('book', book_id, json.dumps(book_data)))
                 cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
-    def get_chapters_for_book(self, book_id):
+    def get_chapters_for_book(self, book_id: int) -> List[DBRow]:
+        """获取书籍的所有章节"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("""
-                SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash 
+                SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash
                 FROM chapters WHERE book_id = ? ORDER BY volume, id
             """, (book_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_chapter_details(self, chapter_id):
+    def get_chapter_details(self, chapter_id: int) -> DBRowOptional:
+        """获取章节详情"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM chapters WHERE id = ?", (chapter_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_chapter_content(self, chapter_id):
+    def get_chapter_content(self, chapter_id: int) -> Tuple[str, int]:
+        """获取章节内容"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT content, word_count FROM chapters WHERE id = ?", (chapter_id,))
             result = cursor.fetchone()
             return (result['content'], result['word_count']) if result else ("", 0)
 
-    def get_chapter_info(self, chapter_id):
+    def get_chapter_info(self, chapter_id: int) -> DBRowOptional:
+        """获取章节完整信息"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash FROM chapters WHERE id = ?", (chapter_id,))
             result = cursor.fetchone()
             return dict(result) if result else None
 
-    def add_chapter(self, book_id, volume, title):
+    def add_chapter(self, book_id: int, volume: str, title: str) -> int:
+        """添加新章节"""
         with self.lock:
             with self.conn:
                 current_time = int(datetime.now().timestamp() * 1000)
-                content = f"# {title}\n\n　　"
+                content = f"# {title}\n\n  "
                 word_count = len(content.strip())
                 content_hash = calculate_hash(content)
-                
+
                 cursor = self.conn.cursor()
                 cursor.execute("""
                     INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (book_id, volume, title, content, word_count, current_time, current_time, content_hash))
-                
+
                 last_row_id = cursor.lastrowid
                 book_edit_time = int(datetime.now().timestamp() * 1000)
                 cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (book_edit_time, book_id))
                 return last_row_id
 
-    def add_chapter_from_backup(self, book_id, chapter_data, content_data):
+    def add_chapter_from_backup(self, book_id: int, chapter_data: DBRow, content_data: Dict[str, Any]) -> int:
+        """从备份数据添加章节"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -347,13 +429,14 @@ class DataManager:
                 ))
                 return cursor.lastrowid
 
-    def update_chapter_content(self, chapter_id, content):
+    def update_chapter_content(self, chapter_id: int, content: str) -> None:
+        """更新章节内容"""
         with self.lock:
             with self.conn:
                 word_count = len(content.strip())
                 content_hash = calculate_hash(content)
                 current_time_ms = int(datetime.now().timestamp() * 1000)
-                
+
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",
                             (content, word_count, current_time_ms, content_hash, chapter_id))
@@ -366,13 +449,15 @@ class DataManager:
                     book_id = book_id_result['book_id']
                     cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (current_time_ms, book_id))
 
-    def update_chapter_title(self, chapter_id, new_title):
+    def update_chapter_title(self, chapter_id: int, new_title: str) -> None:
+        """更新章节标题"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE chapters SET title = ? WHERE id = ?", (new_title, chapter_id))
 
-    def delete_chapter(self, chapter_id):
+    def delete_chapter(self, chapter_id: int) -> None:
+        """删除章节（移入回收站）"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -381,51 +466,55 @@ class DataManager:
                 if not row:
                     return
                 chapter_data = dict(row)
-                
+
                 cursor.execute("INSERT INTO recycle_bin (item_type, item_id, item_data) VALUES (?, ?, ?)",
                             ('chapter', chapter_id, json.dumps(chapter_data)))
                 cursor.execute("DELETE FROM chapters WHERE id = ?", (chapter_id,))
 
-    def update_volume_name(self, book_id, old_volume_name, new_volume_name):
+    def update_volume_name(self, book_id: int, old_volume_name: str, new_volume_name: str) -> None:
+        """更新卷名"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE chapters SET volume = ? WHERE book_id = ? AND volume = ?",
                             (new_volume_name, book_id, old_volume_name))
 
-    def get_recycle_bin_items(self):
+    def get_recycle_bin_items(self) -> List[DBRow]:
+        """获取回收站项目列表"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM recycle_bin ORDER BY deleted_at DESC")
             return [dict(row) for row in cursor.fetchall()]
 
-    def restore_recycle_item(self, recycle_id):
+    def restore_recycle_item(self, recycle_id: int) -> Union[bool, str]:
+        """还原回收站项目"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("SELECT * FROM recycle_bin WHERE id = ?", (recycle_id,))
                 row = cursor.fetchone()
-                if not row: return False
-                
+                if not row:
+                    return False
+
                 item_type = row['item_type']
                 item_data = json.loads(row['item_data'])
-                
+
                 if item_type == 'book':
                     try:
                         cursor.execute("""
                             INSERT INTO books (id, title, description, cover_path, "group", createTime, lastEditTime)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (item_data['id'], item_data['title'], item_data.get('description'), 
-                              item_data.get('cover_path'), item_data.get('group'), 
+                        """, (item_data['id'], item_data['title'], item_data.get('description'),
+                              item_data.get('cover_path'), item_data.get('group'),
                               item_data.get('createTime'), item_data.get('lastEditTime')))
                     except sqlite3.IntegrityError:
                         cursor.execute("""
                             INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
                             VALUES (?, ?, ?, ?, ?, ?)
-                        """, (item_data['title'], item_data.get('description'), 
-                              item_data.get('cover_path'), item_data.get('group'), 
+                        """, (item_data['title'], item_data.get('description'),
+                              item_data.get('cover_path'), item_data.get('group'),
                               item_data.get('createTime'), item_data.get('lastEditTime')))
-                    
+
                 elif item_type == 'chapter':
                     book_id = item_data['book_id']
                     cursor.execute("SELECT id FROM books WHERE id = ?", (book_id,))
@@ -433,37 +522,40 @@ class DataManager:
                         return "parent_missing"
 
                     try:
-                         cursor.execute("""
+                        cursor.execute("""
                             INSERT INTO chapters (id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (item_data['id'], item_data['book_id'], item_data['volume'], 
+                        """, (item_data['id'], item_data['book_id'], item_data['volume'],
                               item_data['title'], item_data['content'], item_data['word_count'],
                               item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
                     except sqlite3.IntegrityError:
-                         cursor.execute("""
+                        cursor.execute("""
                             INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (item_data['book_id'], item_data['volume'], 
+                        """, (item_data['book_id'], item_data['volume'],
                               item_data['title'], item_data['content'], item_data['word_count'],
                               item_data['createTime'], item_data['lastEditTime'], item_data.get('hash')))
 
                 cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
                 return True
 
-    def delete_recycle_item(self, recycle_id):
+    def delete_recycle_item(self, recycle_id: int) -> bool:
+        """彻底删除回收站项目"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("DELETE FROM recycle_bin WHERE id = ?", (recycle_id,))
                 return True
-            
-    def empty_recycle_bin(self):
+
+    def empty_recycle_bin(self) -> None:
+        """清空回收站"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("DELETE FROM recycle_bin")
 
-    def get_all_materials_names(self, book_id=None):
+    def get_all_materials_names(self, book_id: Optional[int] = None) -> List[str]:
+        """获取素材名称列表"""
         with self.lock:
             cursor = self.conn.cursor()
             if book_id:
@@ -472,7 +564,8 @@ class DataManager:
                 cursor.execute("SELECT name FROM materials WHERE book_id IS NULL")
             return [row['name'] for row in cursor.fetchall()]
 
-    def get_materials(self, book_id=None):
+    def get_materials(self, book_id: Optional[int] = None) -> List[DBRow]:
+        """获取素材列表"""
         with self.lock:
             cursor = self.conn.cursor()
             if book_id:
@@ -481,20 +574,22 @@ class DataManager:
                 cursor.execute("SELECT * FROM materials WHERE book_id IS NULL")
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_all_materials(self):
+    def get_all_materials(self) -> List[DBRow]:
+        """获取所有素材"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM materials")
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_material_details(self, material_id):
+    def get_material_details(self, material_id: int) -> DBRowOptional:
+        """获取素材详情"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM materials WHERE id = ?", (material_id,))
             row = cursor.fetchone()
             if not row:
                 return None
-            
+
             material_data = dict(row)
             if material_data['content']:
                 try:
@@ -503,10 +598,11 @@ class DataManager:
                     material_data['content'] = {'value': material_data['content']}
             else:
                 material_data['content'] = {}
-                
+
             return material_data
 
-    def add_material(self, name, type, description, book_id=None, content=None):
+    def add_material(self, name: str, type: str, description: str, book_id: Optional[int] = None, content: Optional[Dict[str, Any]] = None) -> Optional[int]:
+        """添加素材"""
         try:
             with self.lock:
                 with self.conn:
@@ -519,7 +615,8 @@ class DataManager:
             logger.warning(f"添加素材 '{name}' 失败：名称已存在。")
             return None
 
-    def add_material_from_backup(self, material_data):
+    def add_material_from_backup(self, material_data: DBRow) -> None:
+        """从备份数据添加素材"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -528,7 +625,8 @@ class DataManager:
                             (material_data['id'], material_data['name'], material_data['type'],
                                 material_data.get('description', ''), content, material_data.get('book_id')))
 
-    def update_material(self, material_id, name, type, description, content=None):
+    def update_material(self, material_id: int, name: str, type: str, description: str, content: Optional[Dict[str, Any]] = None) -> bool:
+        """更新素材"""
         try:
             with self.lock:
                 with self.conn:
@@ -543,10 +641,11 @@ class DataManager:
             logger.warning(f"更新素材 '{name}' 失败：名称已存在。")
             return False
         except sqlite3.Error as e:
-            logger.error(f"数据库更新素材失败: {e}", exc_info=True)
+            logger.error(f"数据库更新素材失败：{e}", exc_info=True)
             return False
 
-    def delete_material(self, material_id):
+    def delete_material(self, material_id: int) -> bool:
+        """删除素材"""
         try:
             with self.lock:
                 with self.conn:
@@ -554,48 +653,55 @@ class DataManager:
                     cursor.execute("DELETE FROM materials WHERE id = ?", (material_id,))
                     return True
         except sqlite3.Error as e:
-            logger.error(f"删除素材失败: {e}", exc_info=True)
+            logger.error(f"删除素材失败：{e}", exc_info=True)
             return False
 
-    def get_all_groups(self):
+    def get_all_groups(self) -> List[str]:
+        """获取所有分组"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT DISTINCT `group` FROM books WHERE `group` IS NOT NULL AND `group` != '' ORDER BY `group`")
             return [row['group'] for row in cursor.fetchall()]
 
-    def get_books_by_group(self, group_name):
+    def get_books_by_group(self, group_name: str) -> List[DBRow]:
+        """获取分组下的所有书籍"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM books WHERE `group` = ? ORDER BY title", (group_name,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def rename_group(self, old_name, new_name):
+    def rename_group(self, old_name: str, new_name: str) -> bool:
+        """重命名分组"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE books SET `group` = ? WHERE `group` = ?", (new_name, old_name))
                 return cursor.rowcount > 0
 
-    def delete_group(self, group_name):
+    def delete_group(self, group_name: str) -> bool:
+        """删除分组（书籍移至未分组）"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("UPDATE books SET `group` = '未分组' WHERE `group` = ?", (group_name,))
                 return cursor.rowcount > 0
 
-    def get_inspiration_fragments(self):
+    def get_inspiration_fragments(self) -> List[DBRow]:
+        """获取灵感碎片列表"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM inspiration_fragments ORDER BY created_at DESC")
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_all_inspiration_fragments(self):
+    def get_all_inspiration_fragments(self) -> List[DBRow]:
+        """获取所有灵感碎片"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM inspiration_fragments")
             return [dict(row) for row in cursor.fetchall()]
 
-    def add_inspiration_fragment(self, type, content, source=""):
+    def add_inspiration_fragment(self, type: str, content: str, source: str = "") -> int:
+        """添加灵感碎片"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -603,7 +709,8 @@ class DataManager:
                             (type, content, source))
                 return cursor.lastrowid
 
-    def add_inspiration_fragment_from_backup(self, fragment_data):
+    def add_inspiration_fragment_from_backup(self, fragment_data: DBRow) -> None:
+        """从备份数据添加灵感碎片"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -611,12 +718,13 @@ class DataManager:
                             (fragment_data['id'], fragment_data['type'], fragment_data['content'],
                                 fragment_data.get('source', ''), fragment_data.get('created_at')))
 
-    def update_inspiration_fragment(self, fragment_id, type=None, content=None, source=None):
+    def update_inspiration_fragment(self, fragment_id: int, type: Optional[str] = None, content: Optional[str] = None, source: Optional[str] = None) -> bool:
+        """更新灵感碎片"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
-                updates = []
-                params = []
+                updates: List[str] = []
+                params: List[Any] = []
                 if type is not None:
                     updates.append("type = ?")
                     params.append(type)
@@ -633,26 +741,30 @@ class DataManager:
                 cursor.execute(query, params)
                 return cursor.rowcount > 0
 
-    def delete_inspiration_fragment(self, fragment_id):
+    def delete_inspiration_fragment(self, fragment_id: int) -> bool:
+        """删除灵感碎片"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("DELETE FROM inspiration_fragments WHERE id = ?", (fragment_id,))
                 return cursor.rowcount > 0
 
-    def get_inspiration_items(self):
+    def get_inspiration_items(self) -> List[DBRow]:
+        """获取灵感项列表"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM inspiration_items ORDER BY parent_id, title")
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_all_inspiration_items(self):
+    def get_all_inspiration_items(self) -> List[DBRow]:
+        """获取所有灵感项"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM inspiration_items")
             return [dict(row) for row in cursor.fetchall()]
 
-    def add_inspiration_item(self, title, content="", tags="", parent_id=None):
+    def add_inspiration_item(self, title: str, content: str = "", tags: str = "", parent_id: Optional[int] = None) -> int:
+        """添加灵感项"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -660,7 +772,8 @@ class DataManager:
                             (title, content, tags, parent_id))
                 return cursor.lastrowid
 
-    def add_inspiration_item_from_backup(self, item_data):
+    def add_inspiration_item_from_backup(self, item_data: DBRow) -> None:
+        """从备份数据添加灵感项"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -668,12 +781,13 @@ class DataManager:
                             (item_data['id'], item_data['title'], item_data.get('content', ''),
                                 item_data.get('tags', ''), item_data.get('parent_id')))
 
-    def update_inspiration_item(self, item_id, title=None, content=None, tags=None, parent_id=None):
+    def update_inspiration_item(self, item_id: int, title: Optional[str] = None, content: Optional[str] = None, tags: Optional[str] = None, parent_id: Optional[int] = None) -> bool:
+        """更新灵感项"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
-                updates = []
-                params = []
+                updates: List[str] = []
+                params: List[Any] = []
                 if title is not None:
                     updates.append("title = ?")
                     params.append(title)
@@ -693,26 +807,30 @@ class DataManager:
                 cursor.execute(query, params)
                 return cursor.rowcount > 0
 
-    def delete_inspiration_item(self, item_id):
+    def delete_inspiration_item(self, item_id: int) -> bool:
+        """删除灵感项"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 cursor.execute("DELETE FROM inspiration_items WHERE id = ?", (item_id,))
                 return cursor.rowcount > 0
 
-    def get_timelines_for_book(self, book_id):
+    def get_timelines_for_book(self, book_id: int) -> List[DBRow]:
+        """获取书籍的时间轴列表"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM timelines WHERE book_id = ? ORDER BY name", (book_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_all_timelines(self):
+    def get_all_timelines(self) -> List[DBRow]:
+        """获取所有时间轴"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM timelines")
             return [dict(row) for row in cursor.fetchall()]
 
-    def add_timeline(self, book_id, name, description=""):
+    def add_timeline(self, book_id: int, name: str, description: str = "") -> int:
+        """添加时间轴"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -720,7 +838,8 @@ class DataManager:
                             (book_id, name, description))
                 return cursor.lastrowid
 
-    def add_timeline_from_backup(self, timeline_data):
+    def add_timeline_from_backup(self, timeline_data: DBRow) -> None:
+        """从备份数据添加时间轴"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -728,27 +847,30 @@ class DataManager:
                             (timeline_data['id'], timeline_data['book_id'], timeline_data['name'],
                                 timeline_data.get('description', '')))
 
-    def get_timeline_events(self, timeline_id):
+    def get_timeline_events(self, timeline_id: int) -> List[DBRow]:
+        """获取时间轴事件列表"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM timeline_events WHERE timeline_id = ? ORDER BY order_index", (timeline_id,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_all_timeline_events(self):
+    def get_all_timeline_events(self) -> List[DBRow]:
+        """获取所有时间轴事件"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("SELECT * FROM timeline_events")
             return [dict(row) for row in cursor.fetchall()]
 
-    def add_timeline_event_from_backup(self, event_data):
+    def add_timeline_event_from_backup(self, event_data: DBRow) -> None:
+        """从备份数据添加时间轴事件"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
                 referenced_materials = event_data.get('referenced_materials')
                 if isinstance(referenced_materials, str):
-                    try: 
+                    try:
                         json.loads(referenced_materials)
-                    except json.JSONDecodeError: 
+                    except json.JSONDecodeError:
                         referenced_materials = json.dumps([])
                 else:
                     referenced_materials = json.dumps(referenced_materials or [])
@@ -764,7 +886,8 @@ class DataManager:
                     referenced_materials
                 ))
 
-    def update_timeline_events(self, timeline_id, events_data):
+    def update_timeline_events(self, timeline_id: int, events_data: List[Dict[str, Any]]) -> None:
+        """批量更新时间轴事件"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -782,7 +905,8 @@ class DataManager:
                         event.get('status'), referenced_materials_json
                     ))
 
-    def clear_all_writing_data(self):
+    def clear_all_writing_data(self) -> None:
+        """清空所有写作数据"""
         with self.lock:
             with self.conn:
                 cursor = self.conn.cursor()
@@ -794,7 +918,8 @@ class DataManager:
                 cursor.execute("DELETE FROM inspiration_items")
                 cursor.execute("DELETE FROM inspiration_fragments")
 
-    def get_recent_chapters(self, limit=10):
+    def get_recent_chapters(self, limit: int = 10) -> List[DBRow]:
+        """获取最近编辑的章节"""
         with self.lock:
             cursor = self.conn.cursor()
             cursor.execute("""
@@ -807,7 +932,8 @@ class DataManager:
             """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_chapters_modified_since(self, check_time):
+    def get_chapters_modified_since(self, check_time: datetime) -> List[DBRow]:
+        """获取指定时间后修改的章节"""
         with self.lock:
             check_timestamp_ms = int(check_time.timestamp() * 1000)
             cursor = self.conn.cursor()
@@ -819,12 +945,13 @@ class DataManager:
             """, (check_timestamp_ms,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def close(self):
+    def close(self) -> None:
+        """关闭数据库连接"""
         if hasattr(self._local, 'connection'):
             self._local.connection.close()
             del self._local.connection
 
-    def close_local_connection(self):
+    def close_local_connection(self) -> None:
         """关闭当前线程的数据库连接"""
         if hasattr(self._local, 'connection'):
             try:

@@ -1,1 +1,11 @@
-pyside6
+# 核心依赖
+pyside6>=6.6.0
+
+# 导出功能依赖
+markdown>=3.5.0          # Markdown 导出支持
+EbookLib>=0.18           # EPUB 导出支持
+reportlab>=4.0.0         # PDF 导出支持
+
+# 开发依赖
+mypy>=1.8.0              # 类型检查
+pytest>=8.0.0            # 测试框架

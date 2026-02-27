@@ -141,7 +141,7 @@ class BookTreeWidget(QWidget):
         if isinstance(data, int):  # 书籍
             edit_action = menu.addAction("编辑书籍信息")
             set_group_action = menu.addAction("设置分组")
-            export_action = menu.addAction("导出为 TXT")
+            export_action = menu.addAction("导出书籍...")
             delete_action = menu.addAction("删除书籍")
             
             action = menu.exec(self.tree.viewport().mapToGlobal(position))
@@ -228,31 +228,56 @@ class BookTreeWidget(QWidget):
             self.load_books()
 
     def export_book(self, book_id):
-        if not book_id: return
+        """导出书籍，支持多种格式"""
+        if not book_id:
+            return
         book_details = self.data_manager.get_book_details(book_id)
-        if not book_details: return
-        
-        file_path, _ = QFileDialog.getSaveFileName(self, "导出为 TXT", f"{book_details['title']}.txt", "文本文件 (*.txt)")
+        if not book_details:
+            return
+
+        # 使用新的导出器模块
+        from modules.exporters import ExporterFactory, export_book
+
+        # 获取所有可用的导出格式
+        formats = ExporterFactory.get_available_formats()
+
+        # 构建文件过滤器
+        file_filters = ";;".join([
+            f"{fmt['name']}|*.{fmt['extension']}" for fmt in formats
+        ])
+
+        default_filter = f"文本文件 (*.txt)"
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出书籍",
+            f"{book_details['title']}.txt",
+            file_filters,
+            default_filter
+        )
+
         if file_path:
-            try:
-                chapters = self.data_manager.get_chapters_for_book(book_id)
-                with open(file_path, 'w', encoding='utf-8-sig') as f:
-                    f.write(f"书名：{book_details['title']}\n")
-                    f.write(f"描述：{book_details.get('description', '')}\n")
-                    f.write("="*20 + "\n\n")
-                    current_volume = None
-                    for chapter_data in chapters:
-                        if chapter_data['volume'] != current_volume:
-                            current_volume = chapter_data['volume']
-                            f.write(f"\n{'#'*2} {current_volume}\n\n")
-                        chapter_id = chapter_data['id']
-                        content, _ = self.data_manager.get_chapter_content(chapter_id)
-                        f.write(f"### {chapter_data['title']}\n\n")
-                        f.write(content)
-                        f.write("\n\n" + "-"*15 + "\n\n")
-                QMessageBox.information(self, "成功", f"书籍已成功导出到 {os.path.basename(file_path)}")
-            except Exception as e:
-                QMessageBox.critical(self, "导出失败", f"发生错误：\n{e}")
+            # 根据选择的过滤器确定格式
+            format_type = None
+            for fmt in formats:
+                if fmt['name'] in selected_filter or f"*.{fmt['extension']}" in selected_filter:
+                    format_type = fmt['extension']
+                    break
+
+            if not format_type:
+                # 默认使用 txt
+                format_type = 'txt'
+
+            # 确保文件扩展名正确
+            if not file_path.endswith(f'.{format_type}'):
+                file_path = f"{file_path}.{format_type}"
+
+            self.status_message_requested.emit(f"正在导出为 {format_type.upper()}...")
+
+            if export_book(self.data_manager, book_id, format_type, file_path):
+                QMessageBox.information(self, "成功", f"书籍已成功导出到:\n{file_path}")
+                self.status_message_requested.emit(f"导出成功：{os.path.basename(file_path)}")
+            else:
+                QMessageBox.critical(self, "导出失败", "导出过程中发生错误，请查看日志获取详细信息。")
 
     def rename_group(self, old_name):
         new_name, ok = QInputDialog.getText(self, "重命名分组", "请输入新的分组名称:", text=old_name)
