@@ -5,7 +5,7 @@
 import logging
 from typing import List, Optional, Tuple
 
-from PySide6.QtWidgets import QTextEdit, QApplication
+from PySide6.QtWidgets import QTextEdit, QApplication, QWidget
 from PySide6.QtGui import (
     QSyntaxHighlighter, QTextCharFormat, QColor, QFont,
     QTextBlockFormat, QTextCursor, QTextDocument, QKeyEvent
