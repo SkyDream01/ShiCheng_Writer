@@ -52,6 +52,17 @@ def initialize_database() -> None:
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    def table_exists(table_name: str) -> bool:
+        cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        )
+        return cursor.fetchone() is not None
+
+    def table_columns(table_name: str) -> List[str]:
+        cursor.execute(f'PRAGMA table_info("{table_name}")')
+        return [row['name'] for row in cursor.fetchall()]
+
     # 创建书籍表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS books (
@@ -81,6 +92,16 @@ def initialize_database() -> None:
     )
     """)
 
+    # 旧版本曾将素材存放在 settings 表中。必须在创建 materials 前迁移，
+    # 否则 ALTER TABLE 会因目标表已存在而永久失败。
+    settings_columns = table_columns('settings') if table_exists('settings') else []
+    if (
+        settings_columns
+        and {'name', 'type'}.issubset(settings_columns)
+        and not table_exists('materials')
+    ):
+        cursor.execute("ALTER TABLE settings RENAME TO materials")
+
     # 创建素材表
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS materials (
@@ -94,6 +115,14 @@ def initialize_database() -> None:
         UNIQUE(name, book_id)
     )
     """)
+
+    material_columns = table_columns('materials')
+    if 'description' not in material_columns:
+        cursor.execute("ALTER TABLE materials ADD COLUMN description TEXT")
+    if 'content' not in material_columns:
+        cursor.execute("ALTER TABLE materials ADD COLUMN content TEXT")
+    if 'book_id' not in material_columns:
+        cursor.execute("ALTER TABLE materials ADD COLUMN book_id INTEGER")
 
     # 创建回收站表
     cursor.execute("""
@@ -165,27 +194,8 @@ def initialize_database() -> None:
     )
     """)
 
-    # 创建性能索引
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters(book_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_last_edit ON chapters(lastEditTime DESC)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_volume ON chapters(volume)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_books_group ON books(\"group\")")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_book_id ON materials(book_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timelines_book_id ON timelines(book_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_events_timeline_id ON timeline_events(timeline_id)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recycle_bin_deleted_at ON recycle_bin(deleted_at DESC)")
-
-    # 迁移逻辑 - 处理旧版本表结构
-    try:
-        cursor.execute("PRAGMA table_info(settings)")
-        if cursor.fetchone():
-            cursor.execute("ALTER TABLE settings RENAME TO materials")
-    except sqlite3.OperationalError:
-        pass
-
     # 迁移 books 表，添加缺失的列
-    cursor.execute("PRAGMA table_info(books)")
-    columns = [row['name'] for row in cursor.fetchall()]
+    columns = table_columns('books')
     if 'cover_path' not in columns:
         cursor.execute("ALTER TABLE books ADD COLUMN cover_path TEXT")
     if 'group' not in columns:
@@ -196,14 +206,86 @@ def initialize_database() -> None:
         cursor.execute("ALTER TABLE books ADD COLUMN lastEditTime INTEGER")
 
     # 迁移 chapters 表，添加缺失的列
-    cursor.execute("PRAGMA table_info(chapters)")
-    columns = [row['name'] for row in cursor.fetchall()]
+    columns = table_columns('chapters')
     if 'createTime' not in columns:
         cursor.execute("ALTER TABLE chapters ADD COLUMN createTime INTEGER")
     if 'hash' not in columns:
         cursor.execute("ALTER TABLE chapters ADD COLUMN hash TEXT")
     if 'lastEditTime' not in columns:
         cursor.execute("ALTER TABLE chapters ADD COLUMN lastEditTime INTEGER")
+
+    # 如果用户已经运行过旧版的失败迁移，settings 与 materials 可能同时存在。
+    # 在不删除旧表的前提下复制所有兼容列，避免素材继续处于不可见状态。
+    if table_exists('settings') and table_exists('materials'):
+        source_columns = set(table_columns('settings'))
+        target_columns = set(table_columns('materials'))
+        if {'name', 'type'}.issubset(source_columns):
+            ordered_columns = [
+                column
+                for column in ('id', 'name', 'type', 'description', 'content', 'book_id')
+                if column in source_columns and column in target_columns
+            ]
+            quoted_columns = ', '.join(f'"{column}"' for column in ordered_columns)
+            cursor.execute(
+                f"INSERT OR IGNORE INTO materials ({quoted_columns}) "
+                f"SELECT {quoted_columns} FROM settings"
+            )
+
+            # 主键冲突不代表素材本身重复。旧 settings 和新 materials 可能都从
+            # id=1 开始写入；再按素材的实际唯一键补拷一次，让冲突记录获得新 ID。
+            value_columns = [
+                column for column in ordered_columns if column != 'id'
+            ]
+            quoted_value_columns = ', '.join(
+                f'"{column}"' for column in value_columns
+            )
+            source_book_id = (
+                'source."book_id"' if 'book_id' in source_columns else 'NULL'
+            )
+            cursor.execute(
+                f"INSERT OR IGNORE INTO materials ({quoted_value_columns}) "
+                f"SELECT {quoted_value_columns} FROM settings AS source "
+                "WHERE NOT EXISTS ("
+                "SELECT 1 FROM materials AS target "
+                "WHERE target.name = source.name "
+                f"AND target.book_id IS {source_book_id}"
+                ")"
+            )
+
+    # 为迁移前的记录补齐稳定时间戳和哈希；章节备份不再依赖时间戳命名，
+    # 但补齐数据可以保持排序与最近编辑功能正常。
+    migration_time = int(datetime.now().timestamp() * 1000)
+    cursor.execute(
+        "UPDATE books SET createTime = ? + id WHERE createTime IS NULL",
+        (migration_time,),
+    )
+    cursor.execute(
+        "UPDATE books SET lastEditTime = createTime WHERE lastEditTime IS NULL"
+    )
+    cursor.execute(
+        "UPDATE chapters SET createTime = ? + id WHERE createTime IS NULL",
+        (migration_time,),
+    )
+    cursor.execute(
+        "UPDATE chapters SET lastEditTime = createTime WHERE lastEditTime IS NULL"
+    )
+    cursor.execute("SELECT id, content FROM chapters WHERE hash IS NULL")
+    missing_hashes = [
+        (calculate_hash(row['content'] or ''), row['id'])
+        for row in cursor.fetchall()
+    ]
+    if missing_hashes:
+        cursor.executemany("UPDATE chapters SET hash = ? WHERE id = ?", missing_hashes)
+
+    # 索引只能在旧表缺失列全部补齐之后创建。
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_book_id ON chapters(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_last_edit ON chapters(lastEditTime DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chapters_volume ON chapters(volume)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_books_group ON books(\"group\")")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_materials_book_id ON materials(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timelines_book_id ON timelines(book_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_timeline_events_timeline_id ON timeline_events(timeline_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_recycle_bin_deleted_at ON recycle_bin(deleted_at DESC)")
 
     conn.commit()
     conn.close()
@@ -313,12 +395,13 @@ class DataManager:
                 cursor = self.conn.cursor()
                 backup_id = book_data.get('id')
                 cursor.execute("""
-                    INSERT INTO books (id, title, description, "group", createTime, lastEditTime)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO books (id, title, description, cover_path, "group", createTime, lastEditTime)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     backup_id,
                     book_data.get('name', '无标题'),
                     book_data.get('summary', ''),
+                    book_data.get('cover_path', ''),
                     book_data.get('group', '未分组'),
                     book_data.get('createTime'),
                     book_data.get('lastEditTime', book_data.get('createTime'))
@@ -384,7 +467,14 @@ class DataManager:
         """获取章节完整信息"""
         with self.lock:
             cursor = self.conn.cursor()
-            cursor.execute("SELECT id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash FROM chapters WHERE id = ?", (chapter_id,))
+            cursor.execute("""
+                SELECT c.id, c.book_id, c.volume, c.title, c.content,
+                       c.word_count, c.createTime, c.lastEditTime, c.hash,
+                       b.title AS book_title
+                FROM chapters c
+                JOIN books b ON b.id = c.book_id
+                WHERE c.id = ?
+            """, (chapter_id,))
             result = cursor.fetchone()
             return dict(result) if result else None
 
@@ -414,10 +504,7 @@ class DataManager:
             with self.conn:
                 cursor = self.conn.cursor()
                 last_edit_time = chapter_data.get('lastEditTime', chapter_data.get('createTime'))
-                cursor.execute("""
-                    INSERT INTO chapters (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
+                chapter_values = (
                     book_id,
                     chapter_data.get('volumeName', '未分卷'),
                     chapter_data.get('name', '无标题'),
@@ -425,11 +512,25 @@ class DataManager:
                     content_data.get('count', 0),
                     chapter_data.get('createTime'),
                     last_edit_time,
-                    content_data.get('hash', '')
-                ))
-                return cursor.lastrowid
+                    content_data.get('hash', ''),
+                )
+                backup_id = chapter_data.get('id')
+                if backup_id is None:
+                    cursor.execute("""
+                        INSERT INTO chapters
+                        (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, chapter_values)
+                    return cursor.lastrowid
 
-    def update_chapter_content(self, chapter_id: int, content: str) -> None:
+                cursor.execute("""
+                    INSERT INTO chapters
+                    (id, book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (backup_id, *chapter_values))
+                return backup_id
+
+    def update_chapter_content(self, chapter_id: int, content: str) -> bool:
         """更新章节内容"""
         with self.lock:
             with self.conn:
@@ -441,13 +542,14 @@ class DataManager:
                 cursor.execute("UPDATE chapters SET content = ?, word_count = ?, lastEditTime = ?, hash = ? WHERE id = ?",
                             (content, word_count, current_time_ms, content_hash, chapter_id))
                 if cursor.rowcount == 0:
-                    return  # 章节不存在，无需更新书籍时间戳
+                    return False  # 章节不存在，不能把保存误报为成功
 
                 cursor.execute("SELECT book_id FROM chapters WHERE id = ?", (chapter_id,))
                 book_id_result = cursor.fetchone()
                 if book_id_result:
                     book_id = book_id_result['book_id']
                     cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (current_time_ms, book_id))
+                return True
 
     def update_chapter_title(self, chapter_id: int, new_title: str) -> None:
         """更新章节标题"""
@@ -932,17 +1034,34 @@ class DataManager:
             """, (limit,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_chapters_modified_since(self, check_time: datetime) -> List[DBRow]:
-        """获取指定时间后修改的章节"""
+    def get_chapters_modified_since(
+        self,
+        check_time: datetime,
+        until_time: Optional[datetime] = None,
+    ) -> List[DBRow]:
+        """获取时间窗口内修改的章节。"""
         with self.lock:
             check_timestamp_ms = int(check_time.timestamp() * 1000)
+            until_timestamp_ms = (
+                int(until_time.timestamp() * 1000) if until_time is not None else None
+            )
             cursor = self.conn.cursor()
-            cursor.execute("""
-                SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime, b.title as book_title
-                FROM chapters c
-                JOIN books b ON c.book_id = b.id
-                WHERE c.lastEditTime > ?
-            """, (check_timestamp_ms,))
+            if until_timestamp_ms is None:
+                cursor.execute("""
+                    SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime,
+                           b.title as book_title
+                    FROM chapters c
+                    JOIN books b ON c.book_id = b.id
+                    WHERE c.lastEditTime > ?
+                """, (check_timestamp_ms,))
+            else:
+                cursor.execute("""
+                    SELECT c.id, c.book_id, c.title, c.content, c.lastEditTime,
+                           b.title as book_title
+                    FROM chapters c
+                    JOIN books b ON c.book_id = b.id
+                    WHERE c.lastEditTime > ? AND c.lastEditTime <= ?
+                """, (check_timestamp_ms, until_timestamp_ms))
             return [dict(row) for row in cursor.fetchall()]
 
     def close(self) -> None:

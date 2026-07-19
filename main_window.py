@@ -3,6 +3,7 @@ import sys
 import os
 import shutil
 import tempfile
+import logging
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                                QListWidget, QListWidgetItem, QSplitter, QDockWidget,
                                QTreeView, QMessageBox, QInputDialog, QFileDialog,
@@ -59,10 +60,9 @@ class MainWindow(QMainWindow):
 
         # 异步工作线程
         self.load_chapter_worker = None
+        self._load_workers = set()
         self.save_chapter_worker = None
-        self._pending_save_hash = None
-        self._pending_save_content = None
-        self._has_pending_save_request = False
+        self._pending_save_requests = []
 
         # 定时器初始化（在UI设置之前，避免信号触发时定时器不存在）
         self.typing_timer = QTimer(self)
@@ -227,7 +227,6 @@ class MainWindow(QMainWindow):
         # 如果当前书籍不是该章节所属书籍，切换到该书籍
         if self.current_book_id != book_id:
             # 找到书籍项并选中
-            self.current_book_id = book_id
             self.book_tree_widget.select_book(book_id) # 同步 UI
             
             # 手动触发更新，因为 select_book 若在模型中已选中但逻辑不同步时可能不会触发信号
@@ -239,9 +238,11 @@ class MainWindow(QMainWindow):
             # 因此必须手动调用逻辑。
             
             self.on_book_selected_from_widget(book_id, chapter_info['book_title'])
+            if self.current_book_id != book_id:
+                return
         
         # 找到章节项并选中
-        self.find_and_select_chapter(chapter_id)
+        self.find_and_select_chapter(chapter_id, force=True)
     
     def toggle_left_panel(self):
         self.ui_manager.toggle_left_panel()
@@ -295,8 +296,12 @@ class MainWindow(QMainWindow):
 
     def on_book_selected_from_widget(self, book_id, book_title):
         """处理来自 BookTreeWidget 的书籍选择信号"""
-        if self.is_text_changed:
-            self.save_current_chapter()
+        previous_book_id = self.current_book_id
+        if self.is_text_changed and self.current_chapter_id:
+            if not self.save_current_chapter(force_sync=True):
+                self.book_tree_widget.current_book_id = previous_book_id
+                self.book_tree_widget.select_book(previous_book_id)
+                return
 
         self.current_book_id = book_id
         
@@ -330,7 +335,7 @@ class MainWindow(QMainWindow):
         
         # 清除编辑器状态
         self.current_chapter_id = None
-        self.editor.clear()
+        self._clear_editor_content()
         self.word_count_label.setText("字数: -")
         self.typing_speed_label.setText("速度: -")
 
@@ -339,7 +344,7 @@ class MainWindow(QMainWindow):
         if self.current_book_id == book_id:
             self.current_book_id = None
             self.current_chapter_id = None
-            self.editor.clear()
+            self._clear_editor_content()
             
             # [重构] 清空章节树
             self.chapter_tree_widget.set_book_id(None)
@@ -366,6 +371,9 @@ class MainWindow(QMainWindow):
                 # 恢复组件中的选择
                 self.chapter_tree_widget.find_and_select_chapter(self.current_chapter_id, force_select=False)
                 return
+            else:
+                # 用户明确丢弃旧章节的修改。
+                self.is_text_changed = False
         
         # 切换到编辑器视图
         self.central_stack.setCurrentIndex(1)
@@ -376,16 +384,39 @@ class MainWindow(QMainWindow):
         self.editor.setDisabled(True) # 加载时禁止输入
         self.statusBar().showMessage("正在加载章节...", 0)
         
-        if self.load_chapter_worker and self.load_chapter_worker.isRunning():
-            self.load_chapter_worker.terminate()
-            self.load_chapter_worker.wait()
-            
-        self.load_chapter_worker = LoadChapterWorker(self.data_manager, chapter_id)
-        self.load_chapter_worker.finished.connect(self.on_chapter_loaded)
-        self.load_chapter_worker.error.connect(lambda msg: self.statusBar().showMessage(f"加载失败: {msg}"))
-        self.load_chapter_worker.start()
+        worker = LoadChapterWorker(self.data_manager, chapter_id)
+        self.load_chapter_worker = worker
+        self._load_workers.add(worker)
+        worker.completed.connect(
+            lambda content, count, cid=chapter_id: self.on_chapter_loaded(
+                cid,
+                content,
+                count,
+            )
+        )
+        worker.error.connect(
+            lambda message, cid=chapter_id: self.on_chapter_load_failed(cid, message)
+        )
+        worker.finished.connect(lambda w=worker: self._cleanup_load_worker(w))
+        worker.start()
 
-    def on_chapter_loaded(self, content, count):
+    def _cleanup_load_worker(self, worker):
+        self._load_workers.discard(worker)
+        if self.load_chapter_worker is worker:
+            self.load_chapter_worker = None
+
+    def on_chapter_load_failed(self, chapter_id, message):
+        if chapter_id != self.current_chapter_id:
+            return
+        self.current_chapter_id = None
+        self._clear_editor_content()
+        self.central_stack.setCurrentIndex(0)
+        self.statusBar().showMessage(f"加载失败: {message}", 5000)
+
+    def on_chapter_loaded(self, chapter_id, content, count):
+        # 较早的加载任务可以自然结束，但不得覆盖用户后来选择的章节。
+        if chapter_id != self.current_chapter_id:
+            return
         self.editor.setDisabled(False)
         self.editor.blockSignals(True)
         self.editor.setPlainText(content)
@@ -395,7 +426,7 @@ class MainWindow(QMainWindow):
         self.typing_speed_label.setText("速度: 0 字/分")
         
         # 获取章节标题详情（仍为同步，但仅查询元数据，速度快）
-        chapter_details = self.data_manager.get_chapter_details(self.current_chapter_id)
+        chapter_details = self.data_manager.get_chapter_details(chapter_id)
         chapter_title = chapter_details['title'] if chapter_details else "未知章节"
         
         self.statusBar().showMessage(f"已打开章节: {chapter_title}", 3000)
@@ -408,7 +439,7 @@ class MainWindow(QMainWindow):
     def on_chapter_deleted_from_widget(self, chapter_id):
         if self.current_chapter_id == chapter_id:
             self.current_chapter_id = None
-            self.editor.clear()
+            self._clear_editor_content()
             # 章节删除后，如果没选中其他章节，可以切回书籍信息页
             self.central_stack.setCurrentIndex(0)
 
@@ -418,17 +449,37 @@ class MainWindow(QMainWindow):
         self.chapter_tree_widget.find_and_select_chapter(chapter_id, force)
 
                     
+    def _clear_editor_content(self):
+        """清空编辑器而不制造一个没有章节归属的脏状态。"""
+        self.wordcount_timer.stop()
+        self.editor.blockSignals(True)
+        try:
+            self.editor.clear()
+        finally:
+            self.editor.blockSignals(False)
+        self.editor.setDisabled(False)
+        self.is_text_changed = False
+
     def save_current_chapter(self, force_sync=False):
         if self.current_chapter_id and self.is_text_changed:
+            chapter_id = self.current_chapter_id
             content = self.editor.toPlainText()
             
             if force_sync:
                 # 如果有正在进行的后台保存，等待其完成以防止数据覆盖
                 if self.save_chapter_worker and self.save_chapter_worker.isRunning():
                     self.save_chapter_worker.wait()
+
+                # 同步保存的是此刻的最新正文，不能在稍后重放同章节的旧队列项。
+                self._pending_save_requests = [
+                    request
+                    for request in self._pending_save_requests
+                    if request[0] != chapter_id
+                ]
                     
                 try:
-                    self.data_manager.update_chapter_content(self.current_chapter_id, content)
+                    if not self.data_manager.update_chapter_content(chapter_id, content):
+                        raise RuntimeError("章节不存在，无法保存")
                     self.is_text_changed = False
                     self.update_word_count_label(len(content.strip()))
                     self.statusBar().showMessage(f"章节已保存！", 2000)
@@ -438,59 +489,109 @@ class MainWindow(QMainWindow):
                         self.word_count_label.setText(current_text[:-1])
                     return True
                 except Exception as e:
-                    import logging
                     logging.getLogger(__name__).error(f"Failed to save chapter: {e}")
                     QMessageBox.critical(self, "保存失败", f"无法保存章节内容：\n{e}")
                     return False
             else:
                 # 异步保存
-                self._trigger_async_save(content, is_manual=True)
-                return True
-                
+                return self._trigger_async_save(
+                    content,
+                    is_manual=True,
+                    chapter_id=chapter_id,
+                )
+
         elif not self.is_text_changed and self.current_chapter_id:
             # 自动保存时静默处理，只有手动保存提示
             pass
-        return False
-        
-    def _trigger_async_save(self, content, is_manual=False):
+        return bool(self.current_chapter_id)
+
+    def _queue_save_request(self, chapter_id, content, is_manual):
+        """按章节合并排队请求，同时保留章节身份。"""
+        for index, request in enumerate(self._pending_save_requests):
+            if request[0] == chapter_id:
+                self._pending_save_requests[index] = (
+                    chapter_id,
+                    content,
+                    request[2] or is_manual,
+                )
+                return
+        self._pending_save_requests.append((chapter_id, content, is_manual))
+
+    def _trigger_async_save(
+        self,
+        content,
+        is_manual=False,
+        chapter_id=None,
+    ):
         """触发异步保存，如果有正在进行的保存则排队"""
+        target_chapter_id = chapter_id if chapter_id is not None else self.current_chapter_id
+        if target_chapter_id is None:
+            return False
+
         if self.save_chapter_worker and self.save_chapter_worker.isRunning():
-            self._pending_save_content = content
-            self._has_pending_save_request = True
+            self._queue_save_request(target_chapter_id, content, is_manual)
             if is_manual:
                 self.statusBar().showMessage("正在等待后台保存完成...", 0)
-            return
+            return True
 
-        self._pending_save_hash = calculate_hash(content)
-        self.save_chapter_worker = SaveChapterWorker(self.data_manager, self.current_chapter_id, content)
-        self.save_chapter_worker.finished.connect(lambda success: self.on_save_finished(success, is_manual))
-        self.save_chapter_worker.start()
+        content_hash = calculate_hash(content)
+        worker = SaveChapterWorker(self.data_manager, target_chapter_id, content)
+        self.save_chapter_worker = worker
+        worker.completed.connect(
+            lambda success, cid=target_chapter_id, saved_hash=content_hash, manual=is_manual: self.on_save_finished(
+                success,
+                manual,
+                cid,
+                saved_hash,
+            )
+        )
+        worker.error.connect(
+            lambda message, cid=target_chapter_id: logging.getLogger(__name__).error(
+                "Failed to save chapter %s: %s",
+                cid,
+                message,
+            )
+        )
+        worker.finished.connect(lambda w=worker: self._on_save_worker_thread_finished(w))
+        worker.start()
         
         if is_manual:
              self.statusBar().showMessage("正在保存...", 0)
+        return True
 
-    def on_save_finished(self, success, is_manual=False):
+    def on_save_finished(
+        self,
+        success,
+        is_manual=False,
+        chapter_id=None,
+        saved_hash=None,
+    ):
         if success:
-             current_hash = calculate_hash(self.editor.toPlainText())
-             # 只有当内容没有再次改变时才清除脏标志
-             if current_hash == self._pending_save_hash:
-                 self.is_text_changed = False
-                 current_text = self.word_count_label.text()
-                 if current_text.endswith('*'):
-                     self.word_count_label.setText(current_text[:-1])
+             # 只有仍在显示同一章节且正文未再次变化时才清除脏标志。
+             if chapter_id == self.current_chapter_id:
+                 current_hash = calculate_hash(self.editor.toPlainText())
+                 if current_hash == saved_hash:
+                     self.is_text_changed = False
+                     current_text = self.word_count_label.text()
+                     if current_text.endswith('*'):
+                         self.word_count_label.setText(current_text[:-1])
              
              if is_manual or self.is_text_changed: # 如果手动保存，或状态仍为脏（说明有新变动但此次保存成功），显示消息
                 self.statusBar().showMessage("保存成功", 2000)
         else:
              self.statusBar().showMessage("保存失败", 3000)
-             
-        # 处理排队的保存请求
-        if self._has_pending_save_request:
-            content = self._pending_save_content
-            self._pending_save_content = None
-            self._has_pending_save_request = False
-            # 递归触发下一次保存（此时worker已结束）
-            self._trigger_async_save(content, is_manual=False) # 排队的任务通常视为自动处理
+
+    def _on_save_worker_thread_finished(self, worker):
+        if self.save_chapter_worker is not worker:
+            return
+        self.save_chapter_worker = None
+        if self._pending_save_requests:
+            chapter_id, content, is_manual = self._pending_save_requests.pop(0)
+            self._trigger_async_save(
+                content,
+                is_manual=is_manual,
+                chapter_id=chapter_id,
+            )
             
     def refresh_editor_highlighter(self):
         if self.current_book_id:
@@ -582,17 +683,55 @@ class MainWindow(QMainWindow):
         self.typing_speed_label.setText(f"速度: {int(self.typing_speed)} 字/分")
         self.last_char_count = current_char_count
 
+    def _flush_pending_saves_sync(self):
+        """在关闭数据库前同步完成所有已经排队的章节保存。"""
+        if self.save_chapter_worker and self.save_chapter_worker.isRunning():
+            self.save_chapter_worker.wait()
+        self.save_chapter_worker = None
+
+        pending_requests = self._pending_save_requests
+        self._pending_save_requests = []
+        try:
+            for chapter_id, content, _ in pending_requests:
+                if not self.data_manager.update_chapter_content(chapter_id, content):
+                    raise RuntimeError(f"章节 {chapter_id} 不存在")
+            return True
+        except Exception as error:
+            logging.getLogger(__name__).exception("Failed to flush pending saves")
+            QMessageBox.critical(self, "保存失败", f"无法完成排队保存：\n{error}")
+            return False
+
     def closeEvent(self, event):
         if self.is_text_changed:
             reply = QMessageBox.question(self, "退出提示", "当前章节有未保存的修改，是否保存？", QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
-            if reply == QMessageBox.Save: self.save_current_chapter(force_sync=True)
+            if reply == QMessageBox.Save:
+                if not self.save_current_chapter(force_sync=True):
+                    event.ignore()
+                    return
             elif reply == QMessageBox.Cancel:
                 event.ignore()
                 return
+            else:
+                self._pending_save_requests = [
+                    request
+                    for request in self._pending_save_requests
+                    if request[0] != self.current_chapter_id
+                ]
+                self.is_text_changed = False
+
+        if not self._flush_pending_saves_sync():
+            event.ignore()
+            return
+
+        # 加载线程使用独立连接；关闭 DataManager 前必须让它们自然结束。
+        for worker in list(self._load_workers):
+            worker.wait()
 
         # 关闭时的备份
         self.show_status_message("正在执行关闭前的阶段点备份...")
-        self.backup_manager.create_stage_point_backup()
+        self.backup_manager.wait_for_current_backup()
+        if self.backup_manager.create_stage_point_backup():
+            self.backup_manager.wait_for_current_backup()
 
         self.typing_timer.stop()
         self.data_manager.close()
@@ -652,13 +791,19 @@ class MainWindow(QMainWindow):
         self.show_status_message(message)
 
     def open_backup_manager(self):
-        if self.is_text_changed: self.save_current_chapter(force_sync=True)
+        if self.is_text_changed and not self.save_current_chapter(force_sync=True):
+            return
         dialog = BackupDialog(self.backup_manager, self)
         dialog.exec()
         if dialog.result() == QDialog.Accepted:
             self.load_books()
-            self.chapter_model.clear()
-            self.editor.clear()
             self.current_book_id = None
             self.current_chapter_id = None
+            self.chapter_tree_widget.set_book_id(None)
+            self._clear_editor_content()
+            self.book_info_page.reset()
+            self.central_stack.setCurrentIndex(0)
+            self.add_chapter_action.setEnabled(False)
+            self.add_volume_action.setEnabled(False)
+            self.export_action.setEnabled(False)
     

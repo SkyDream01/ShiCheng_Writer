@@ -97,7 +97,10 @@ class InspirationKitPanel(QWidget):
         if ok and text and text != frag['content']:
             # 需要在 database.py 中实现 update_inspiration_fragment
             if hasattr(self.data_manager, 'update_inspiration_fragment'):
-                self.data_manager.update_inspiration_fragment(frag['id'], text)
+                self.data_manager.update_inspiration_fragment(
+                    frag['id'],
+                    content=text,
+                )
                 self.load_fragments()
             else:
                 QMessageBox.warning(self, "未实现", "数据库缺少更新功能 (update_inspiration_fragment)。")

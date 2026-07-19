@@ -124,9 +124,10 @@ class MaterialHighlighter(QSyntaxHighlighter):
 
         pattern_str = "|".join(patterns_parts)
 
-        # 使用优化选项创建正则表达式
+        # QRegularExpression 会在首次匹配时自行优化。PySide6 并未暴露
+        # setOptimizationHints/OptimizeOnFirstUsageOption，调用它们会在存在
+        # 任意素材关键词时抛出 AttributeError。
         pattern = QRegularExpression(pattern_str)
-        pattern.setOptimizationHints(QRegularExpression.OptimizeOnFirstUsageOption)
         self.highlighting_rules.append((pattern, self.highlight_format))
 
         # 更新缓存

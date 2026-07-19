@@ -1,6 +1,7 @@
 import unittest
 import os
 import shutil
+import sqlite3
 import tempfile
 from modules.database import DataManager, initialize_database
 import modules.database as database_module
@@ -54,6 +55,9 @@ class TestDataManager(unittest.TestCase):
         self.assertEqual(chapter['title'], "Chapter 1")
         self.assertEqual(chapter['volume'], "Volume 1")
         self.assertEqual(chapter['book_id'], book_id)
+
+        chapter_info = self.data_manager.get_chapter_info(chapter_id)
+        self.assertEqual(chapter_info['book_title'], "Test Book")
 
     def test_update_chapter_content(self):
         book_id = self.data_manager.add_book(title="Test Book")
@@ -191,6 +195,118 @@ class TestDataManager(unittest.TestCase):
         import json
         refs = json.loads(events[1]['referenced_materials'])
         self.assertEqual(refs[0]['name'], "Mat1")
+
+
+class TestLegacyDatabaseMigration(unittest.TestCase):
+    def test_missing_columns_and_settings_materials_are_migrated(self):
+        test_dir = tempfile.mkdtemp()
+        db_path = os.path.join(test_dir, "legacy.db")
+        original_db_file = database_module.DB_FILE
+        data_manager = None
+        try:
+            connection = sqlite3.connect(db_path)
+            connection.execute("""
+                CREATE TABLE books (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE chapters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    book_id INTEGER NOT NULL,
+                    volume TEXT,
+                    title TEXT NOT NULL,
+                    content TEXT,
+                    word_count INTEGER DEFAULT 0
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE settings (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL
+                )
+            """)
+            connection.execute(
+                "INSERT INTO books (title, description) VALUES ('Legacy', '')"
+            )
+            connection.execute("""
+                INSERT INTO chapters
+                (book_id, volume, title, content, word_count)
+                VALUES (1, 'Volume', 'Chapter', 'legacy text', 11)
+            """)
+            connection.execute("""
+                INSERT INTO settings (id, name, type)
+                VALUES (1, 'Legacy Hero', 'Character')
+            """)
+            connection.commit()
+            connection.close()
+
+            database_module.DB_FILE = db_path
+            initialize_database()
+            data_manager = DataManager()
+
+            chapter = data_manager.get_chapter_details(1)
+            self.assertIsNotNone(chapter['createTime'])
+            self.assertIsNotNone(chapter['lastEditTime'])
+            self.assertIsNotNone(chapter['hash'])
+            self.assertEqual(
+                data_manager.get_all_materials()[0]['name'],
+                'Legacy Hero',
+            )
+        finally:
+            if data_manager is not None:
+                data_manager.close_local_connection()
+            database_module.DB_FILE = original_db_file
+            shutil.rmtree(test_dir)
+
+    def test_settings_material_survives_primary_key_collision(self):
+        test_dir = tempfile.mkdtemp()
+        db_path = os.path.join(test_dir, "legacy_collision.db")
+        original_db_file = database_module.DB_FILE
+        data_manager = None
+        try:
+            connection = sqlite3.connect(db_path)
+            connection.execute("""
+                CREATE TABLE settings (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                CREATE TABLE materials (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL
+                )
+            """)
+            connection.execute("""
+                INSERT INTO settings (id, name, type)
+                VALUES (1, 'Legacy Hero', 'Character')
+            """)
+            connection.execute("""
+                INSERT INTO materials (id, name, type)
+                VALUES (1, 'Current Place', 'Location')
+            """)
+            connection.commit()
+            connection.close()
+
+            database_module.DB_FILE = db_path
+            initialize_database()
+            data_manager = DataManager()
+
+            self.assertEqual(
+                {item['name'] for item in data_manager.get_all_materials()},
+                {'Legacy Hero', 'Current Place'},
+            )
+        finally:
+            if data_manager is not None:
+                data_manager.close_local_connection()
+            database_module.DB_FILE = original_db_file
+            shutil.rmtree(test_dir)
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,10 +4,10 @@ import shutil
 import tempfile
 import json
 import zipfile
-from PySide6.QtCore import QThread
+from datetime import datetime, timedelta
 from modules.database import DataManager, initialize_database
 import modules.database as database_module
-from modules.backup import BackupWorker
+from modules.backup import BackupManager, BackupWorker
 
 class TestBackupLogic(unittest.TestCase):
     def setUp(self):
@@ -30,9 +30,14 @@ class TestBackupLogic(unittest.TestCase):
         
     def _populate_data(self):
         # Add a book
-        book_id = self.data_manager.add_book(title="Backup Test Book", description="Desc")
+        book_id = self.data_manager.add_book(
+            title="Backup Test Book",
+            description="Desc",
+            cover_path="cover.png",
+        )
+        self.book_id = book_id
         # Add chapters
-        self.data_manager.add_chapter(book_id, "Vol 1", "Chapter 1")
+        self.chapter_id = self.data_manager.add_chapter(book_id, "Vol 1", "Chapter 1")
         # Add materials
         self.data_manager.add_material(name="Mat1", type="Text", description="Desc")
 
@@ -79,6 +84,147 @@ class TestBackupLogic(unittest.TestCase):
                 materials = json.load(f)
                 self.assertEqual(len(materials), 1)
                 self.assertEqual(materials[0]['name'], "Mat1")
+
+    def test_chapter_content_files_use_stable_ids(self):
+        second_chapter_id = self.data_manager.add_chapter(
+            self.book_id,
+            "Vol 1",
+            "Chapter 2",
+        )
+        self.data_manager.update_chapter_content(self.chapter_id, "FIRST")
+        self.data_manager.update_chapter_content(second_chapter_id, "SECOND")
+        with self.data_manager.conn:
+            self.data_manager.conn.execute(
+                "UPDATE chapters SET createTime = NULL WHERE id IN (?, ?)",
+                (self.chapter_id, second_chapter_id),
+            )
+
+        zip_path = BackupWorker('stage', self.backup_dir)._create_zip(
+            self.data_manager,
+            "stable_ids_",
+        )
+
+        with zipfile.ZipFile(zip_path, 'r') as archive:
+            content_files = sorted(
+                name for name in archive.namelist() if '/content/' in name
+            )
+            self.assertEqual(
+                content_files,
+                [
+                    f'book/{self.book_id}/content/chapter_{self.chapter_id}.json',
+                    f'book/{self.book_id}/content/chapter_{second_chapter_id}.json',
+                ],
+            )
+            book_data = json.loads(
+                archive.read(f'book/{self.book_id}/book.json')
+            )
+            chapter_metadata = book_data['children'][0]['children']
+            self.assertEqual(
+                {chapter['id'] for chapter in chapter_metadata},
+                {self.chapter_id, second_chapter_id},
+            )
+
+    def test_incomplete_zip_is_rejected_without_clearing_data(self):
+        backup_path = os.path.join(
+            self.backup_dir,
+            'backup_stage_incomplete.zip',
+        )
+        with zipfile.ZipFile(backup_path, 'w') as archive:
+            archive.writestr('README.txt', 'missing manifest')
+
+        manager = BackupManager(self.data_manager, self.backup_dir)
+        result = manager.restore_from_backup({
+            'file': os.path.basename(backup_path),
+            'dir': self.backup_dir,
+            'type': 'Stage',
+        })
+
+        self.assertFalse(result)
+        self.assertIsNotNone(self.data_manager.get_book_details(self.book_id))
+        self.assertIsNotNone(self.data_manager.get_chapter_details(self.chapter_id))
+
+    def test_restore_failure_rolls_back_current_connection(self):
+        valid_path = BackupWorker('stage', self.backup_dir)._create_zip(
+            self.data_manager,
+            "rollback_source_",
+        )
+        broken_path = os.path.join(
+            self.backup_dir,
+            'backup_stage_broken_material.zip',
+        )
+        with zipfile.ZipFile(valid_path, 'r') as source, zipfile.ZipFile(
+            broken_path,
+            'w',
+            zipfile.ZIP_DEFLATED,
+        ) as destination:
+            for name in source.namelist():
+                if name == 'materials.json':
+                    destination.writestr(name, json.dumps([{}]))
+                else:
+                    destination.writestr(name, source.read(name))
+
+        manager = BackupManager(self.data_manager, self.backup_dir)
+        result = manager.restore_from_backup({
+            'file': os.path.basename(broken_path),
+            'dir': self.backup_dir,
+            'type': 'Stage',
+        })
+
+        self.assertFalse(result)
+        self.assertEqual(
+            self.data_manager.get_book_details(self.book_id)['title'],
+            'Backup Test Book',
+        )
+        self.data_manager.add_book('After rollback')
+        self.data_manager.close_local_connection()
+        self.data_manager = DataManager()
+        self.assertEqual(
+            {book['title'] for book in self.data_manager.get_all_books()},
+            {'Backup Test Book', 'After rollback'},
+        )
+
+    def test_full_restore_preserves_chapter_ids_and_cover(self):
+        original_content = "content captured by backup"
+        self.data_manager.update_chapter_content(self.chapter_id, original_content)
+        zip_path = BackupWorker('stage', self.backup_dir)._create_zip(
+            self.data_manager,
+            "roundtrip_",
+        )
+
+        self.data_manager.update_chapter_content(self.chapter_id, "newer content")
+        extra_book_id = self.data_manager.add_book("Extra")
+
+        manager = BackupManager(self.data_manager, self.backup_dir)
+        result = manager.restore_from_backup({
+            'file': os.path.basename(zip_path),
+            'dir': self.backup_dir,
+            'type': 'Stage',
+        })
+
+        self.assertTrue(result)
+        self.assertIsNone(self.data_manager.get_book_details(extra_book_id))
+        self.assertEqual(
+            self.data_manager.get_chapter_content(self.chapter_id)[0],
+            original_content,
+        )
+        self.assertEqual(
+            self.data_manager.get_book_details(self.book_id)['cover_path'],
+            'cover.png',
+        )
+
+    def test_busy_snapshot_does_not_advance_cursor(self):
+        class BusyWorker:
+            @staticmethod
+            def isRunning():
+                return True
+
+        manager = BackupManager(self.data_manager, self.backup_dir)
+        manager.last_snapshot_check_time = datetime.now() - timedelta(days=1)
+        previous_check_time = manager.last_snapshot_check_time
+        manager._current_worker = BusyWorker()
+
+        self.assertFalse(manager.create_snapshot_backup())
+        self.assertEqual(manager.last_snapshot_check_time, previous_check_time)
 
 if __name__ == '__main__':
     unittest.main()

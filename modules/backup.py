@@ -3,18 +3,17 @@
 备份模块 - 实现三级备份策略（快照线、阶段点、日终归档）
 """
 import os
-import shutil
 import json
 import zipfile
 import tempfile
-import uuid
 import logging
+import sqlite3
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 from PySide6.QtCore import QObject, Signal, QThread
 
-from .database import DataManager, DB_FILE, DBRow
+from .database import DataManager
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +132,10 @@ class BackupWorker(QThread):
                                 "count": chapter['word_count'],
                                 "hash": chapter.get('hash', '')
                             }
-                            chapter_filename = os.path.join(content_path, f"{chapter['createTime']}.json")
+                            # 章节 ID 在数据库内稳定且唯一；时间戳可能为空或重复，
+                            # 不能作为正文文件的身份标识。
+                            content_file = f"chapter_{chapter['id']}.json"
+                            chapter_filename = os.path.join(content_path, content_file)
                             with open(chapter_filename, 'w', encoding='utf-8') as f:
                                 json.dump(chapter_content_data, f, ensure_ascii=False, indent=4)
 
@@ -141,8 +143,13 @@ class BackupWorker(QThread):
                             if vol_name not in volumes_structure:
                                 volumes_structure[vol_name] = {"name": vol_name, "children": [], "createTime": None}
                             volumes_structure[vol_name]['children'].append({
-                                "name": chapter['title'], "count": chapter['word_count'],
-                                "createTime": chapter['createTime'], "volumeName": vol_name
+                                "id": chapter['id'],
+                                "name": chapter['title'],
+                                "count": chapter['word_count'],
+                                "createTime": chapter['createTime'],
+                                "lastEditTime": chapter.get('lastEditTime'),
+                                "volumeName": vol_name,
+                                "contentFile": f"content/{content_file}",
                             })
 
                         book_data_for_json = data_manager.get_book_details(book['id'])
@@ -227,12 +234,17 @@ class BackupManager(QObject):
         self._current_worker: Optional[BackupWorker] = None
         self._latest_backup_filename: Optional[str] = None
         self._latest_backup_type: Optional[str] = None
+        self._pending_snapshot_check_time: Optional[datetime] = None
 
-    def _start_worker(self, task_type: str, snapshot_data: Optional[Dict[str, Any]] = None) -> None:
+    def _start_worker(
+        self,
+        task_type: str,
+        snapshot_data: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """启动备份工作线程"""
         if self._current_worker and self._current_worker.isRunning():
             self.log_message.emit("后台已有备份任务在运行，本次跳过。")
-            return
+            return False
 
         # 清理之前的 worker（如果存在）
         if self._current_worker:
@@ -245,6 +257,7 @@ class BackupManager(QObject):
         self._current_worker.finished.connect(self._on_worker_finished)
         self._current_worker.backup_created.connect(self._on_backup_created)
         self._current_worker.start()
+        return True
 
     def _disconnect_worker_signals(self, worker: BackupWorker) -> None:
         """安全地断开 worker 的信号连接"""
@@ -263,6 +276,16 @@ class BackupManager(QObject):
 
     def _on_worker_finished(self, success: bool, message: str) -> None:
         """处理备份工作线程完成事件"""
+        if (
+            success
+            and self._current_worker
+            and self._current_worker.task_type == 'snapshot'
+            and self._pending_snapshot_check_time is not None
+        ):
+            self.last_snapshot_check_time = self._pending_snapshot_check_time
+        if self._current_worker and self._current_worker.task_type == 'snapshot':
+            self._pending_snapshot_check_time = None
+
         # 无论成功失败，都将结果转发给 backup_finished 信号
         self.backup_finished.emit(success, message)
 
@@ -277,34 +300,56 @@ class BackupManager(QObject):
         self._latest_backup_type = backup_type
         self.log_message.emit(f"备份文件已创建：{backup_filename}")
 
-    def create_stage_point_backup(self) -> None:
+    def create_stage_point_backup(self) -> bool:
         """创建阶段点备份"""
         self.log_message.emit("开始阶段点备份 (后台运行)...")
-        self._start_worker('stage')
+        return self._start_worker('stage')
 
-    def create_archive_backup(self) -> None:
+    def create_archive_backup(self) -> bool:
         """创建日终归档备份（每天仅一次）"""
         today_str = datetime.now().strftime("%Y-%m-%d")
         if any(f.startswith(f"backup_archive_{today_str}") for f in os.listdir(self.base_backup_dir)):
-            return
+            return False
         self.log_message.emit("开始日终归档备份 (后台运行)...")
-        self._start_worker('archive')
+        return self._start_worker('archive')
 
-    def create_snapshot_backup(self) -> None:
+    def create_snapshot_backup(self) -> bool:
         """创建快照线增量备份"""
-        modified_chapters = self.data_manager.get_chapters_modified_since(self.last_snapshot_check_time)
+        snapshot_upper_bound = datetime.now()
+        modified_chapters = self.data_manager.get_chapters_modified_since(
+            self.last_snapshot_check_time,
+            snapshot_upper_bound,
+        )
         if not modified_chapters:
-            return
+            # 查询使用了闭区间上界；即使此刻有其他备份在运行，之后的修改也会
+            # 由下一窗口捕获，因此空窗口可以安全推进游标。
+            self.last_snapshot_check_time = snapshot_upper_bound
+            return True
 
-        snapshot_data: Dict[str, Any] = {"backup_time": datetime.now().isoformat(), "chapters": []}
+        snapshot_data: Dict[str, Any] = {
+            "backup_time": snapshot_upper_bound.isoformat(),
+            "chapters": [],
+        }
         for chapter in modified_chapters:
             snapshot_data["chapters"].append({
                 "id": chapter['id'], "title": chapter['title'], "book_id": chapter['book_id'],
                 "content": chapter['content'], "modified_time": chapter['lastEditTime']
             })
 
-        self.last_snapshot_check_time = datetime.now()
-        self._start_worker('snapshot', snapshot_data)
+        self._pending_snapshot_check_time = snapshot_upper_bound
+        if not self._start_worker('snapshot', snapshot_data):
+            self._pending_snapshot_check_time = None
+            return False
+        return True
+
+    def wait_for_current_backup(self, timeout_ms: Optional[int] = None) -> bool:
+        """等待当前后台备份结束，供应用安全关闭时使用。"""
+        worker = self._current_worker
+        if not worker or not worker.isRunning():
+            return True
+        if timeout_ms is None:
+            return worker.wait()
+        return worker.wait(timeout_ms)
 
     def _cleanup_local_backups(self) -> None:
         """清理过期的本地备份文件"""
@@ -351,14 +396,129 @@ class BackupManager(QObject):
             with open(backup_path, 'r', encoding='utf-8') as f:
                 snapshot_data = json.load(f)
             chapters_to_restore = snapshot_data.get("chapters", [])
+            if not isinstance(chapters_to_restore, list):
+                raise ValueError("快照中的 chapters 字段格式无效")
+
+            missing_ids = [
+                chapter_data.get('id')
+                for chapter_data in chapters_to_restore
+                if not isinstance(chapter_data, dict)
+                or chapter_data.get('id') is None
+                or self.data_manager.get_chapter_details(chapter_data['id']) is None
+            ]
+            if missing_ids:
+                raise ValueError(f"快照引用了不存在的章节 ID：{missing_ids}")
+
             for chapter_data in chapters_to_restore:
-                self.data_manager.update_chapter_content(chapter_data['id'], chapter_data['content'])
+                if not self.data_manager.update_chapter_content(
+                    chapter_data['id'],
+                    chapter_data.get('content', ''),
+                ):
+                    raise ValueError(f"无法恢复章节 ID：{chapter_data['id']}")
             self.log_message.emit(f"成功从快照恢复 {len(chapters_to_restore)} 个章节。")
             return True
         except Exception as e:
             self.log_message.emit(f"从快照恢复失败：{e}")
             logger.exception("快照恢复失败")
             return False
+
+    @staticmethod
+    def _safe_extract_zip(zip_file: zipfile.ZipFile, destination: str) -> None:
+        """只允许 ZIP 成员解压到指定临时目录内。"""
+        destination_root = os.path.realpath(destination)
+        for member in zip_file.infolist():
+            target_path = os.path.realpath(os.path.join(destination_root, member.filename))
+            try:
+                is_inside = os.path.commonpath([destination_root, target_path]) == destination_root
+            except ValueError:
+                is_inside = False
+            if not is_inside:
+                raise ValueError(f"备份包含不安全路径：{member.filename}")
+        zip_file.extractall(destination_root)
+
+    @staticmethod
+    def _load_json(path: str, expected_type: type) -> Any:
+        if not os.path.isfile(path):
+            raise ValueError(f"备份缺少必要文件：{os.path.basename(path)}")
+        with open(path, 'r', encoding='utf-8') as file:
+            data = json.load(file)
+        if not isinstance(data, expected_type):
+            raise ValueError(f"备份文件格式无效：{os.path.basename(path)}")
+        return data
+
+    def _build_restore_plan(self, temp_dir: str) -> Dict[str, Any]:
+        """在触碰当前数据库前完整解析并校验恢复内容。"""
+        book_root_path = os.path.join(temp_dir, 'book')
+        book_list = self._load_json(
+            os.path.join(book_root_path, 'bookList.json'),
+            list,
+        )
+        plan: Dict[str, Any] = {"books": []}
+
+        for book_item in book_list:
+            if not isinstance(book_item, dict) or book_item.get('id') is None:
+                raise ValueError("bookList.json 包含无效书籍记录")
+            book_id = book_item['id']
+            book_path = os.path.join(book_root_path, str(book_id))
+            book_data = self._load_json(os.path.join(book_path, 'book.json'), dict)
+            if book_data.get('id') is None:
+                book_data['id'] = book_id
+
+            chapter_entries = []
+            volumes = book_data.get('children', [])
+            if not isinstance(volumes, list):
+                raise ValueError(f"书籍 {book_id} 的卷结构无效")
+            for volume in volumes:
+                if not isinstance(volume, dict) or not isinstance(volume.get('children', []), list):
+                    raise ValueError(f"书籍 {book_id} 的章节结构无效")
+                for chapter_meta in volume.get('children', []):
+                    if not isinstance(chapter_meta, dict):
+                        raise ValueError(f"书籍 {book_id} 包含无效章节记录")
+
+                    relative_content_path = chapter_meta.get('contentFile')
+                    if relative_content_path:
+                        content_path = os.path.realpath(
+                            os.path.join(book_path, relative_content_path)
+                        )
+                    else:
+                        # 兼容旧版备份格式。
+                        legacy_filename = f"{chapter_meta.get('createTime')}.json"
+                        content_path = os.path.realpath(
+                            os.path.join(book_path, 'content', legacy_filename)
+                        )
+
+                    book_path_root = os.path.realpath(book_path)
+                    try:
+                        is_inside_book = (
+                            os.path.commonpath([book_path_root, content_path]) == book_path_root
+                        )
+                    except ValueError:
+                        is_inside_book = False
+                    if not is_inside_book:
+                        raise ValueError(f"章节正文路径无效：{relative_content_path}")
+
+                    content_data = self._load_json(content_path, dict)
+                    chapter_entries.append((chapter_meta, content_data))
+
+            plan["books"].append((book_data, chapter_entries))
+
+        optional_tables = {
+            "materials": ('materials.json', 'settings.json'),
+            "inspiration_items": ('inspiration_items.json',),
+            "inspiration_fragments": ('inspiration_fragments.json',),
+            "timelines": ('timelines.json',),
+            "timeline_events": ('timeline_events.json',),
+        }
+        for key, filenames in optional_tables.items():
+            table_data: List[Any] = []
+            for filename in filenames:
+                path = os.path.join(temp_dir, filename)
+                if os.path.isfile(path):
+                    table_data = self._load_json(path, list)
+                    break
+            plan[key] = table_data
+
+        return plan
 
     def restore_from_backup(self, backup_info: BackupInfo) -> bool:
         """
@@ -372,129 +532,90 @@ class BackupManager(QObject):
         if not os.path.exists(backup_path):
             self.log_message.emit("备份文件不存在。")
             return False
+        if not zipfile.is_zipfile(backup_path):
+            self.log_message.emit("备份文件不是有效的 ZIP 文件。")
+            return False
 
-        # 使用时间戳+UUID 生成唯一的恢复 ID，避免文件名冲突
-        restore_id = f"{int(datetime.now().timestamp() * 1000)}_{uuid.uuid4().hex[:8]}"
-        backed_up_files: List[Tuple[str, str]] = []
-
+        safety_connection: Optional[sqlite3.Connection] = None
+        safety_path: Optional[str] = None
+        database_was_modified = False
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 with zipfile.ZipFile(backup_path, 'r') as zipf:
-                    zipf.extractall(temp_dir)
+                    self._safe_extract_zip(zipf, temp_dir)
 
-                self.log_message.emit(f"正在从 {backup_info['type']} 备份 '{backup_info['file']}' 恢复...")
+                # 所有引用文件和 JSON 必须在清空现有数据前验证完成。
+                restore_plan = self._build_restore_plan(temp_dir)
 
-                # 1. 备份当前数据库文件 (使用唯一文件名)
-                db_files_to_backup = [DB_FILE, DB_FILE + '-shm', DB_FILE + '-wal']
-                for db_file in db_files_to_backup:
-                    if os.path.exists(db_file):
-                        backup_file = f"{db_file}.restore_backup_{restore_id}"
-                        shutil.copy2(db_file, backup_file)
-                        backed_up_files.append((db_file, backup_file))
-                        self.log_message.emit(f"已备份数据库文件：{os.path.basename(db_file)} -> {os.path.basename(backup_file)}")
+                self.log_message.emit(
+                    f"正在从 {backup_info.get('type', '完整')} 备份 "
+                    f"'{backup_info['file']}' 恢复..."
+                )
 
-                # 2. 清空数据库
+                # 使用 SQLite 在线备份 API 获取一致的安全副本；不要复制仍打开的
+                # db/wal/shm 文件组合。
+                safety_fd, safety_path = tempfile.mkstemp(
+                    prefix='shicheng_restore_',
+                    suffix='.sqlite',
+                )
+                os.close(safety_fd)
+                safety_connection = sqlite3.connect(safety_path)
+                with self.data_manager.lock:
+                    self.data_manager.conn.backup(safety_connection)
+
                 self.log_message.emit("正在清空本地数据库...")
                 self.data_manager.clear_all_writing_data()
+                database_was_modified = True
                 self.log_message.emit("本地数据库已清空，准备写入备份数据...")
 
-                # 3. 恢复数据
-                book_root_path = os.path.join(temp_dir, 'book')
-                booklist_path = os.path.join(book_root_path, 'bookList.json')
-                if os.path.exists(booklist_path):
-                    with open(booklist_path, 'r', encoding='utf-8') as f:
-                        book_list = json.load(f)
+                for book_data, chapter_entries in restore_plan["books"]:
+                    restored_book_id = self.data_manager.add_book_from_backup(book_data)
+                    self.log_message.emit(f"正在恢复书籍：{book_data.get('name')}")
+                    for chapter_meta, content_data in chapter_entries:
+                        self.data_manager.add_chapter_from_backup(
+                            restored_book_id,
+                            chapter_meta,
+                            content_data,
+                        )
 
-                    for book_item in book_list:
-                        book_id = book_item['id']
-                        book_json_path = os.path.join(book_root_path, str(book_id), 'book.json')
-                        if os.path.exists(book_json_path):
-                            with open(book_json_path, 'r', encoding='utf-8') as f:
-                                book_data = json.load(f)
-
-                            restored_book_id = self.data_manager.add_book_from_backup(book_data)
-                            self.log_message.emit(f"正在恢复书籍：{book_data.get('name')}")
-
-                            if 'children' in book_data:
-                                for volume in book_data['children']:
-                                    for chapter_meta in volume['children']:
-                                        content_filename = f"{chapter_meta['createTime']}.json"
-                                        content_path = os.path.join(book_root_path, str(book_id), 'content', content_filename)
-                                        if os.path.exists(content_path):
-                                            with open(content_path, 'r', encoding='utf-8') as f:
-                                                content_data = json.load(f)
-                                            self.data_manager.add_chapter_from_backup(restored_book_id, chapter_meta, content_data)
-
-                # 恢复其他模块数据
-                materials_path = os.path.join(temp_dir, 'materials.json')
-                if not os.path.exists(materials_path):
-                    materials_path = os.path.join(temp_dir, 'settings.json')
-                if os.path.exists(materials_path):
-                    with open(materials_path, 'r', encoding='utf-8') as f:
-                        for m in json.load(f):
-                            self.data_manager.add_material_from_backup(m)
-
-                insp_items_path = os.path.join(temp_dir, 'inspiration_items.json')
-                if os.path.exists(insp_items_path):
-                    with open(insp_items_path, 'r', encoding='utf-8') as f:
-                        for i in json.load(f):
-                            self.data_manager.add_inspiration_item_from_backup(i)
-
-                insp_fragments_path = os.path.join(temp_dir, 'inspiration_fragments.json')
-                if os.path.exists(insp_fragments_path):
-                    with open(insp_fragments_path, 'r', encoding='utf-8') as f:
-                        for frag in json.load(f):
-                            self.data_manager.add_inspiration_fragment_from_backup(frag)
-
-                timelines_path = os.path.join(temp_dir, 'timelines.json')
-                if os.path.exists(timelines_path):
-                    with open(timelines_path, 'r', encoding='utf-8') as f:
-                        for t in json.load(f):
-                            self.data_manager.add_timeline_from_backup(t)
-
-                events_path = os.path.join(temp_dir, 'timeline_events.json')
-                if os.path.exists(events_path):
-                    with open(events_path, 'r', encoding='utf-8') as f:
-                        for e in json.load(f):
-                            self.data_manager.add_timeline_event_from_backup(e)
+                for material in restore_plan["materials"]:
+                    self.data_manager.add_material_from_backup(material)
+                for item in restore_plan["inspiration_items"]:
+                    self.data_manager.add_inspiration_item_from_backup(item)
+                for fragment in restore_plan["inspiration_fragments"]:
+                    self.data_manager.add_inspiration_fragment_from_backup(fragment)
+                for timeline in restore_plan["timelines"]:
+                    self.data_manager.add_timeline_from_backup(timeline)
+                for event in restore_plan["timeline_events"]:
+                    self.data_manager.add_timeline_event_from_backup(event)
 
             self.log_message.emit("数据库恢复成功。请重启应用以刷新界面。")
-
-            # 4. 恢复成功，清理临时备份文件
-            for _, backup_file in backed_up_files:
-                try:
-                    if os.path.exists(backup_file):
-                        os.remove(backup_file)
-                except OSError:
-                    pass
-
             return True
 
         except Exception as e:
-            # 5. 恢复失败，执行回滚
             self.log_message.emit(f"恢复失败：{e}")
-            logger.exception("备份恢复失败")
-
-            if backed_up_files:
-                self.log_message.emit("正在恢复备份的数据库文件...")
-                restore_success = True
-                for original_file, backup_file in backed_up_files:
-                    try:
-                        if os.path.exists(backup_file):
-                            shutil.copy2(backup_file, original_file)
-                            self.log_message.emit(f"已恢复数据库文件：{os.path.basename(original_file)}")
-                    except Exception as restore_error:
-                        self.log_message.emit(f"恢复数据库文件 {os.path.basename(original_file)} 失败：{restore_error}")
-                        restore_success = False
-
-                if restore_success:
-                    self.log_message.emit("数据库文件已恢复至恢复前的状态。")
-                else:
-                    self.log_message.emit("警告：部分数据库文件恢复失败，数据可能不一致。")
+            if database_was_modified:
+                logger.exception("备份恢复失败，正在回滚")
             else:
-                self.log_message.emit("警告：没有可用的数据库备份文件，数据可能已丢失。")
-
+                logger.warning("备份校验失败：%s", e)
+            if database_was_modified and safety_connection is not None:
+                try:
+                    with self.data_manager.lock:
+                        self.data_manager.conn.rollback()
+                        safety_connection.backup(self.data_manager.conn)
+                    self.log_message.emit("数据库已恢复至操作前状态。")
+                except Exception as restore_error:
+                    self.log_message.emit(f"安全回滚失败：{restore_error}")
+                    logger.exception("恢复失败后的安全回滚失败")
             return False
+        finally:
+            if safety_connection is not None:
+                safety_connection.close()
+            if safety_path and os.path.exists(safety_path):
+                try:
+                    os.remove(safety_path)
+                except OSError:
+                    logger.warning("无法删除恢复安全副本：%s", safety_path)
 
     def delete_backup(self, backup_info: BackupInfo) -> bool:
         """删除备份文件"""

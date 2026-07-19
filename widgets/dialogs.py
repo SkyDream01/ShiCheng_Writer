@@ -197,8 +197,13 @@ class RecycleBinDialog(QDialog):
             if parent:
                 if hasattr(parent, 'load_books'):
                     parent.load_books()
-                if hasattr(parent, 'current_book_id') and parent.current_book_id:
-                    parent.load_chapters_for_book(parent.current_book_id)
+                if (
+                    getattr(parent, 'current_book_id', None)
+                    and hasattr(parent, 'chapter_tree_widget')
+                ):
+                    parent.chapter_tree_widget.load_chapters_for_book(
+                        parent.current_book_id
+                    )
         elif res == "parent_missing":
              QMessageBox.warning(self, "无法还原", "该章节所属的书籍已不存在，无法直接还原。\n请先检查回收站并还原对应的书籍。")
         else:
@@ -289,9 +294,15 @@ class BackupDialog(QDialog):
         if 'snapshot' in backup_type_lower or '快照线' in backup_type_lower:
             if self.backup_manager.restore_from_snapshot(backup_info):
                 QMessageBox.information(self, "成功", "数据已从快照恢复。\n请检查相关章节内容。")
-                if self.parent() and hasattr(self.parent(), 'current_book_id'):
-                    if self.parent().current_book_id:
-                        self.parent().load_chapters_for_book(self.parent().current_book_id)
+                parent = self.parent()
+                if (
+                    parent
+                    and getattr(parent, 'current_book_id', None)
+                    and hasattr(parent, 'chapter_tree_widget')
+                ):
+                    parent.chapter_tree_widget.load_chapters_for_book(
+                        parent.current_book_id
+                    )
                 self.accept()
             else:
                 QMessageBox.critical(self, "失败", "恢复过程中发生错误。")
