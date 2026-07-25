@@ -20,7 +20,8 @@ class ChapterTreeWidget(QWidget):
         super().__init__(parent)
         self.data_manager = data_manager
         self.current_book_id = None
-        
+        self._last_active_volume = None
+
         self.setup_ui()
         
     def setup_ui(self):
@@ -116,12 +117,27 @@ class ChapterTreeWidget(QWidget):
         self.proxy_model.setFilterRegularExpression(search_text if search_text else "")
         self.tree.expandAll()
 
+    def _update_last_active_volume(self, index):
+        """根据当前选中项更新 _last_active_volume"""
+        source_index = self._get_source_idx(index)
+        item = self.model.itemFromIndex(source_index)
+        if not item:
+            return
+        data = item.data(Qt.UserRole)
+        if isinstance(data, int):
+            parent = item.parent()
+            if parent:
+                self._last_active_volume = parent.text()
+        else:
+            self._last_active_volume = item.text()
+
     def on_chapter_selected(self, index):
         source_index = self._get_source_idx(index)
         item = self.model.itemFromIndex(source_index)
         if not item or not isinstance(item.data(Qt.UserRole), int):
             return
-        
+
+        self._update_last_active_volume(index)
         chapter_id = item.data(Qt.UserRole)
         self.chapter_selected.emit(chapter_id)
 
@@ -178,15 +194,14 @@ class ChapterTreeWidget(QWidget):
             QMessageBox.warning(self, "提示", "请先选择一本书籍！")
             return
 
-        # 1. Ask for Volume Name
         vol_name, ok = QInputDialog.getText(self, "新建卷", "请输入新卷名:")
         if not ok or not vol_name.strip(): return
-        
-        # 2. Ask for Initial Chapter (Required by DB structure)
+
         chap_title, ok = QInputDialog.getText(self, "新建章节", f"卷《{vol_name}》需要至少一个章节才能创建。\n请输入初始章节名:")
         if not ok or not chap_title.strip(): return
-        
+
         new_chapter_id = self.data_manager.add_chapter(self.current_book_id, vol_name, chap_title)
+        self._last_active_volume = vol_name
         self.load_chapters_for_book(self.current_book_id)
         self.find_and_select_chapter(new_chapter_id, force_select=True)
         self.status_message_requested.emit(f"已创建新卷《{vol_name}》及章节《{chap_title}》")
@@ -195,34 +210,38 @@ class ChapterTreeWidget(QWidget):
         if self.current_book_id is None:
             QMessageBox.warning(self, "提示", "请先选择一本书籍！")
             return
-            
-        # Try to intelligently determine target volume
+
         target_volume = self._get_selected_volume_name()
-        
+
         if target_volume:
-            # Smart mode: Add to identified volume
             title, ok = QInputDialog.getText(self, "新建章节", f"在卷《{target_volume}》下新建章节:\n请输入章节名:")
             if ok:
                 if title and title.strip():
                     new_chapter_id = self.data_manager.add_chapter(self.current_book_id, target_volume, title)
+                    self._last_active_volume = target_volume
                     self.load_chapters_for_book(self.current_book_id)
                     self.find_and_select_chapter(new_chapter_id, force_select=True)
                 else:
                     QMessageBox.warning(self, "警告", "章节名不能为空！")
         else:
-            # Fallback: Ask for volume selection
             chapters = self.data_manager.get_chapters_for_book(self.current_book_id)
             current_volumes = sorted(list({c['volume'] for c in chapters if c['volume']}))
             if not current_volumes: current_volumes = ["未分卷"]
-            
-            volume, ok_vol = QInputDialog.getItem(self, "分卷", "请选择分卷（或输入新卷名）：", current_volumes, 0, True)
+
+            # 默认选中上次操作的卷
+            default_index = 0
+            if self._last_active_volume and self._last_active_volume in current_volumes:
+                default_index = current_volumes.index(self._last_active_volume)
+
+            volume, ok_vol = QInputDialog.getItem(self, "分卷", "请选择分卷（或输入新卷名）：", current_volumes, default_index, True)
             if not ok_vol: return
             if not volume: volume = "未分卷"
-            
+
             title, ok_title = QInputDialog.getText(self, "新建章节", "请输入章节名:")
             if ok_title:
                 if title and title.strip():
                     new_chapter_id = self.data_manager.add_chapter(self.current_book_id, volume, title)
+                    self._last_active_volume = volume
                     self.load_chapters_for_book(self.current_book_id)
                     self.find_and_select_chapter(new_chapter_id, force_select=True)
                 else:
@@ -241,6 +260,21 @@ class ChapterTreeWidget(QWidget):
                 QMessageBox.warning(self, "警告", "章节名不能为空！")
             # Reselect/restore view state if needed
 
+    def _remove_chapter_item(self, chapter_id):
+        """从模型中移除指定章节节点（增量更新）"""
+        for row in range(self.model.rowCount()):
+            volume_item = self.model.item(row)
+            if not volume_item:
+                continue
+            for child_row in range(volume_item.rowCount()):
+                child = volume_item.child(child_row)
+                if child and child.data(Qt.UserRole) == chapter_id:
+                    volume_item.removeRow(child_row)
+                    # 如果卷下无章节，移除卷节点
+                    if volume_item.rowCount() == 0:
+                        self.model.removeRow(row)
+                    return
+
     def delete_chapter(self, chapter_id):
         reply = QMessageBox.question(self, '确认删除', 
             "确定要删除这个章节吗？\n该操作会将其移入回收站，您可以在“文件 > 回收站”中恢复。", 
@@ -249,7 +283,7 @@ class ChapterTreeWidget(QWidget):
         if reply == QMessageBox.Yes:
             chapter_details = self.data_manager.get_chapter_details(chapter_id)
             self.data_manager.delete_chapter(chapter_id)
-            self.load_chapters_for_book(self.current_book_id)
+            self._remove_chapter_item(chapter_id)
             self.chapter_deleted.emit(chapter_id)
             
             title = chapter_details['title'] if chapter_details else "未知"
@@ -261,6 +295,7 @@ class ChapterTreeWidget(QWidget):
             if new_volume_name and new_volume_name.strip():
                 if new_volume_name != old_volume_name:
                     self.data_manager.update_volume_name(self.current_book_id, old_volume_name, new_volume_name)
+                    self._last_active_volume = new_volume_name
                     self.load_chapters_for_book(self.current_book_id)
                     self.status_message_requested.emit(f"卷《{old_volume_name}》已重命名为《{new_volume_name}》")
             else:

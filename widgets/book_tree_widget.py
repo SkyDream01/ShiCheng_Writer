@@ -200,6 +200,23 @@ class BookTreeWidget(QWidget):
             if self.current_book_id == book_id:
                 self.book_selected.emit(book_id, new_details['title'])
 
+    def _remove_book_item(self, book_id):
+        """从模型中移除指定书籍节点（增量更新）"""
+        for row in range(self.model.rowCount()):
+            group_item = self.model.item(row)
+            if group_item and group_item.data(Qt.UserRole) == "group":
+                for child_row in range(group_item.rowCount()):
+                    child = group_item.child(child_row)
+                    if child and child.data(Qt.UserRole) == book_id:
+                        group_item.removeRow(child_row)
+                        # 如果分组为空，移除分组
+                        if group_item.rowCount() == 0:
+                            self.model.removeRow(row)
+                        return
+            elif group_item and group_item.data(Qt.UserRole) == book_id:
+                self.model.removeRow(row)
+                return
+
     def delete_book(self, book_id):
         reply = QMessageBox.question(self, '确认删除', 
             "确定要删除这本书吗？\n该操作会将其移入回收站，您可以在“文件 > 回收站”中恢复。", 
@@ -209,7 +226,7 @@ class BookTreeWidget(QWidget):
             book_details = self.data_manager.get_book_details(book_id)
             title = book_details['title'] if book_details else "未知"
             self.data_manager.delete_book(book_id)
-            self.load_books()
+            self._remove_book_item(book_id)
             
             if self.current_book_id == book_id:
                 self.current_book_id = None
