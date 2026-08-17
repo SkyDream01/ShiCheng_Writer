@@ -2,14 +2,13 @@
 """
 导出器模块 - 支持多种格式的书籍导出
 """
-import os
+import html
 import re
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from .database import DataManager, DBRow
+from .database import DataManager
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +186,9 @@ class HTMLExporter(Exporter):
     def export(self, book_data: Dict[str, Any], output_path: str) -> bool:
         """导出为 HTML 格式"""
         try:
+            title = html.escape(str(book_data.get('title') or '无标题'))
+            author = html.escape(str(book_data.get('author') or '未知'))
+            summary = html.escape(str(book_data.get('summary') or '无'))
             # 生成目录 HTML
             toc_html = self._generate_toc(book_data)
             # 生成章节 HTML
@@ -197,7 +199,7 @@ class HTMLExporter(Exporter):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{book_data['title']}</title>
+    <title>{title}</title>
     <style>
         body {{
             font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
@@ -268,11 +270,11 @@ class HTMLExporter(Exporter):
 </head>
 <body>
     <div class="container">
-        <h1>《{book_data['title']}》</h1>
+        <h1>《{title}》</h1>
 
         <div class="book-info">
-            <p><strong>作者:</strong> {book_data.get('author', '未知')}</p>
-            <p><strong>简介:</strong> {book_data.get('summary', '无')}</p>
+            <p><strong>作者:</strong> {author}</p>
+            <p><strong>简介:</strong> {summary}</p>
         </div>
 
         <div class="toc">
@@ -305,14 +307,22 @@ class HTMLExporter(Exporter):
         for volume in volumes:
             vol_name = volume.get('name', '')
             if vol_name and vol_name != '未分卷':
-                toc_parts.append(f'<li><strong>{vol_name}</strong><ul>')
+                safe_volume_name = html.escape(str(vol_name))
+                toc_parts.append(f'<li><strong>{safe_volume_name}</strong><ul>')
 
             for chapter in volume.get('children', []):
                 chapter_title = chapter.get('name', '无标题')
+                safe_chapter_title = html.escape(str(chapter_title))
                 if vol_name and vol_name != '未分卷':
-                    toc_parts.append(f'<li><a href="#chapter-{chapter_index}">{vol_name} - {chapter_title}</a></li>')
+                    toc_parts.append(
+                        f'<li><a href="#chapter-{chapter_index}">'
+                        f'{safe_volume_name} - {safe_chapter_title}</a></li>'
+                    )
                 else:
-                    toc_parts.append(f'<li><a href="#chapter-{chapter_index}">{chapter_title}</a></li>')
+                    toc_parts.append(
+                        f'<li><a href="#chapter-{chapter_index}">'
+                        f'{safe_chapter_title}</a></li>'
+                    )
                 chapter_index += 1
 
             if vol_name and vol_name != '未分卷':
@@ -330,18 +340,22 @@ class HTMLExporter(Exporter):
         for volume in volumes:
             vol_name = volume.get('name', '')
             if vol_name and vol_name != '未分卷':
-                chapters_parts.append(f'<h2 class="volume-title">{vol_name}</h2>')
+                safe_volume_name = html.escape(str(vol_name))
+                chapters_parts.append(
+                    f'<h2 class="volume-title">{safe_volume_name}</h2>'
+                )
 
             for chapter in volume.get('children', []):
                 chapter_title = chapter.get('name', '无标题')
                 chapter_content = chapter.get('content', '')
+                safe_chapter_title = html.escape(str(chapter_title))
 
                 # 处理内容
-                content_html = self._process_content(chapter_content)
+                content_html = self._process_content(str(chapter_content))
 
                 chapters_parts.append(f"""
                 <div class="chapter" id="chapter-{chapter_index}">
-                    <h3>{chapter_title}</h3>
+                    <h3>{safe_chapter_title}</h3>
                     <div class="chapter-content">
                         {content_html}
                     </div>
@@ -364,7 +378,8 @@ class HTMLExporter(Exporter):
                 # 处理中文缩进
                 if p.startswith('  '):
                     p = p[2:]
-                html_paragraphs.append(f'<p>{p.replace(chr(10), "<br>")}</p>')
+                escaped_paragraph = html.escape(p).replace('\n', '<br>')
+                html_paragraphs.append(f'<p>{escaped_paragraph}</p>')
         return '\n'.join(html_paragraphs)
 
 
@@ -416,11 +431,11 @@ def export_book(data_manager: DataManager, book_id: int, format_type: str, outpu
         return False
 
     # 构建导出数据结构
-    chapters = data_manager.get_chapters_for_book(book_id)
+    chapters = data_manager.get_chapters_for_book(book_id, include_content=True)
     volumes_structure: Dict[str, Dict[str, Any]] = {}
 
     for chapter in chapters:
-        content_text, _ = data_manager.get_chapter_content(chapter['id'])
+        content_text = chapter.get('content') or ''
         vol_name = chapter['volume'] or "未分卷"
 
         if vol_name not in volumes_structure:

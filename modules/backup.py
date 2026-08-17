@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from PySide6.QtCore import QObject, Signal, QThread
+from PySide6.QtCore import QObject, Signal, QThread, Slot
 
 from .database import DataManager
 
@@ -70,13 +70,14 @@ class BackupWorker(QThread):
             self.finished.emit(True, "无数据更新")
             return
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        backup_filename = f"backup_snapshot_{timestamp}.json"
-        backup_filepath = os.path.join(self.base_backup_dir, backup_filename)
+        backup_filepath = self._get_unique_backup_path(
+            "backup_snapshot_",
+            ".json",
+        )
+        backup_filename = os.path.basename(backup_filepath)
 
         try:
-            with open(backup_filepath, 'w', encoding='utf-8') as f:
-                json.dump(self.snapshot_data, f, ensure_ascii=False, indent=2)
+            self._write_json_atomically(backup_filepath, self.snapshot_data)
 
             self.log.emit(f"快照线备份本地成功：{backup_filename}")
             self.backup_created.emit('snapshot', backup_filename, "快照备份完成")
@@ -115,14 +116,16 @@ class BackupWorker(QThread):
                         os.makedirs(content_path)
 
                         # 获取章节列表
-                        chapters = data_manager.get_chapters_for_book(book['id'])
+                        chapters = data_manager.get_chapters_for_book(
+                            book['id'],
+                            include_content=True,
+                        )
                         total_word_count = 0
                         last_edit_chapter = "无章节"
                         volumes_structure: Dict[str, Dict[str, Any]] = {}
 
                         for chapter in chapters:
-                            # 单独获取章节内容
-                            content_text, _ = data_manager.get_chapter_content(chapter['id'])
+                            content_text = chapter.get('content') or ''
 
                             total_word_count += chapter['word_count']
                             last_edit_chapter = chapter['title']
@@ -152,15 +155,18 @@ class BackupWorker(QThread):
                                 "contentFile": f"content/{content_file}",
                             })
 
-                        book_data_for_json = data_manager.get_book_details(book['id'])
-                        if book_data_for_json:
-                            book_data_for_json['name'] = book_data_for_json.pop('title')
-                            book_data_for_json['summary'] = book_data_for_json.pop('description')
-                            book_data_for_json['children'] = list(volumes_structure.values())
+                        book_data_for_json = dict(book)
+                        book_data_for_json['name'] = book_data_for_json.pop('title')
+                        book_data_for_json['summary'] = book_data_for_json.pop(
+                            'description'
+                        )
+                        book_data_for_json['children'] = list(
+                            volumes_structure.values()
+                        )
 
-                            book_json_path = os.path.join(book_path, 'book.json')
-                            with open(book_json_path, 'w', encoding='utf-8') as f:
-                                json.dump(book_data_for_json, f, ensure_ascii=False, indent=4)
+                        book_json_path = os.path.join(book_path, 'book.json')
+                        with open(book_json_path, 'w', encoding='utf-8') as f:
+                            json.dump(book_data_for_json, f, ensure_ascii=False, indent=4)
 
                         book_list_data.append({
                             "name": book['title'], "author": "", "createTime": book['createTime'],
@@ -178,18 +184,27 @@ class BackupWorker(QThread):
                 self._dump_table(data_manager.get_all_timelines, os.path.join(temp_dir, 'timelines.json'))
                 self._dump_table(data_manager.get_all_timeline_events, os.path.join(temp_dir, 'timeline_events.json'))
 
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                zip_filename = f"{prefix}{timestamp}.zip"
-                zip_filepath = os.path.join(self.base_backup_dir, zip_filename)
+                zip_filepath = self._get_unique_backup_path(prefix, '.zip')
+                temporary_zip_filepath = f"{zip_filepath}.tmp"
 
-                with zipfile.ZipFile(zip_filepath, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for root, _, files in os.walk(temp_dir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, temp_dir)
-                            zipf.write(file_path, arcname)
+                try:
+                    with zipfile.ZipFile(
+                        temporary_zip_filepath,
+                        'w',
+                        zipfile.ZIP_DEFLATED,
+                    ) as zipf:
+                        for root, _, files in os.walk(temp_dir):
+                            for file in files:
+                                file_path = os.path.join(root, file)
+                                arcname = os.path.relpath(file_path, temp_dir)
+                                zipf.write(file_path, arcname)
+                    os.replace(temporary_zip_filepath, zip_filepath)
+                except Exception:
+                    if os.path.exists(temporary_zip_filepath):
+                        os.remove(temporary_zip_filepath)
+                    raise
 
-                self.log.emit(f"本地打包成功：{zip_filename}")
+                self.log.emit(f"本地打包成功：{os.path.basename(zip_filepath)}")
                 return zip_filepath
 
         except Exception as e:
@@ -200,9 +215,34 @@ class BackupWorker(QThread):
     def _dump_table(self, fetch_func: Callable[[], List[Any]], filepath: str) -> None:
         """导出数据库表数据到 JSON 文件"""
         data = fetch_func()
-        if data:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+
+    def _get_unique_backup_path(self, prefix: str, extension: str) -> str:
+        """返回不会覆盖已有备份的文件路径。"""
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S_%f")
+        path = os.path.join(self.base_backup_dir, f"{prefix}{timestamp}{extension}")
+        suffix = 1
+        while os.path.exists(path):
+            path = os.path.join(
+                self.base_backup_dir,
+                f"{prefix}{timestamp}_{suffix}{extension}",
+            )
+            suffix += 1
+        return path
+
+    @staticmethod
+    def _write_json_atomically(path: str, data: Dict[str, Any]) -> None:
+        """将 JSON 完整写入临时文件后再替换目标文件。"""
+        temporary_path = f"{path}.tmp"
+        try:
+            with open(temporary_path, 'w', encoding='utf-8') as file:
+                json.dump(data, file, ensure_ascii=False, indent=2)
+            os.replace(temporary_path, path)
+        except Exception:
+            if os.path.exists(temporary_path):
+                os.remove(temporary_path)
+            raise
 
 
 class BackupManager(QObject):
@@ -251,12 +291,13 @@ class BackupManager(QObject):
             self._disconnect_worker_signals(self._current_worker)
             self._current_worker = None
 
-        self._current_worker = BackupWorker(task_type, self.base_backup_dir)
-        self._current_worker.snapshot_data = snapshot_data
-        self._current_worker.log.connect(self.log_message.emit)
-        self._current_worker.finished.connect(self._on_worker_finished)
-        self._current_worker.backup_created.connect(self._on_backup_created)
-        self._current_worker.start()
+        worker = BackupWorker(task_type, self.base_backup_dir)
+        worker.snapshot_data = snapshot_data
+        worker.log.connect(self.log_message.emit)
+        worker.finished.connect(self._on_worker_finished)
+        worker.backup_created.connect(self._on_backup_created)
+        self._current_worker = worker
+        worker.start()
         return True
 
     def _disconnect_worker_signals(self, worker: BackupWorker) -> None:
@@ -274,16 +315,32 @@ class BackupManager(QObject):
         except (RuntimeError, TypeError):
             pass
 
-    def _on_worker_finished(self, success: bool, message: str) -> None:
+    @Slot(bool, str)
+    def _on_worker_finished(
+        self,
+        success: bool,
+        message: str,
+        worker: Optional[BackupWorker] = None,
+    ) -> None:
         """处理备份工作线程完成事件"""
+        if worker is None:
+            sender = self.sender()
+            worker = sender if isinstance(sender, BackupWorker) else None
+        if worker is None:
+            return
+        # A queued signal from a just-finished worker can arrive after another
+        # task has begun.  Never let that stale result alter the new task's
+        # snapshot cursor or status.
+        if worker is not self._current_worker:
+            return
+
         if (
             success
-            and self._current_worker
-            and self._current_worker.task_type == 'snapshot'
+            and worker.task_type == 'snapshot'
             and self._pending_snapshot_check_time is not None
         ):
             self.last_snapshot_check_time = self._pending_snapshot_check_time
-        if self._current_worker and self._current_worker.task_type == 'snapshot':
+        if worker.task_type == 'snapshot':
             self._pending_snapshot_check_time = None
 
         # 无论成功失败，都将结果转发给 backup_finished 信号
@@ -294,8 +351,22 @@ class BackupManager(QObject):
 
         self._cleanup_local_backups()
 
-    def _on_backup_created(self, backup_type: str, backup_filename: str, message: str) -> None:
+    @Slot(str, str, str)
+    def _on_backup_created(
+        self,
+        backup_type: str,
+        backup_filename: str,
+        message: str,
+        worker: Optional[BackupWorker] = None,
+    ) -> None:
         """处理备份创建完成事件"""
+        if worker is None:
+            sender = self.sender()
+            worker = sender if isinstance(sender, BackupWorker) else None
+        if worker is None:
+            return
+        if worker is not self._current_worker:
+            return
         self._latest_backup_filename = backup_filename
         self._latest_backup_type = backup_type
         self.log_message.emit(f"备份文件已创建：{backup_filename}")

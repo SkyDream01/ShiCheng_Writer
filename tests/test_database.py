@@ -3,6 +3,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from datetime import datetime
 from modules.database import DataManager, initialize_database
 import modules.database as database_module
 
@@ -69,6 +70,53 @@ class TestDataManager(unittest.TestCase):
         content, word_count = self.data_manager.get_chapter_content(chapter_id)
         self.assertEqual(content, new_content)
         self.assertEqual(word_count, len(new_content))
+
+    def test_chapter_list_can_include_content_without_extra_lookup(self):
+        book_id = self.data_manager.add_book(title="Test Book")
+        chapter_id = self.data_manager.add_chapter(
+            book_id=book_id,
+            volume="Vol 1",
+            title="Chap 1",
+        )
+        self.data_manager.update_chapter_content(chapter_id, "chapter body")
+
+        metadata_only = self.data_manager.get_chapters_for_book(book_id)
+        chapters_with_content = self.data_manager.get_chapters_for_book(
+            book_id,
+            include_content=True,
+        )
+
+        self.assertNotIn('content', metadata_only[0])
+        self.assertEqual(chapters_with_content[0]['content'], "chapter body")
+
+    def test_snapshot_window_includes_its_lower_time_boundary(self):
+        book_id = self.data_manager.add_book(title="Test Book")
+        chapter_id = self.data_manager.add_chapter(book_id, "Vol 1", "Chap 1")
+        boundary = datetime.now()
+        boundary_ms = int(boundary.timestamp() * 1000)
+        with self.data_manager.conn:
+            self.data_manager.conn.execute(
+                "UPDATE chapters SET lastEditTime = ? WHERE id = ?",
+                (boundary_ms, chapter_id),
+            )
+
+        modified = self.data_manager.get_chapters_modified_since(
+            boundary,
+            boundary,
+        )
+
+        self.assertEqual([chapter['id'] for chapter in modified], [chapter_id])
+
+    def test_connections_configure_busy_timeout_and_wal(self):
+        busy_timeout = self.data_manager.conn.execute(
+            "PRAGMA busy_timeout"
+        ).fetchone()[0]
+        journal_mode = self.data_manager.conn.execute(
+            "PRAGMA journal_mode"
+        ).fetchone()[0]
+
+        self.assertEqual(busy_timeout, 10_000)
+        self.assertEqual(journal_mode.lower(), 'wal')
 
     def test_recycle_bin(self):
         book_id = self.data_manager.add_book(title="Test Book")

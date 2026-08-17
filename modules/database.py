@@ -41,15 +41,29 @@ def get_db_connection() -> sqlite3.Connection:
     Returns:
         SQLite 数据库连接对象
     """
-    conn = sqlite3.connect(DB_FILE)
+    # A save worker, a chapter loader, and a backup worker can all access the
+    # database at the same time.  Let SQLite wait briefly for a writer instead
+    # of failing an otherwise recoverable operation with "database is locked".
+    conn = sqlite3.connect(DB_FILE, timeout=10)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
+
+
+def require_last_insert_id(cursor: sqlite3.Cursor) -> int:
+    """Return a successful INSERT's generated primary key."""
+    last_row_id = cursor.lastrowid
+    if last_row_id is None:
+        raise RuntimeError("插入数据后未获得主键 ID")
+    return last_row_id
 
 
 def initialize_database() -> None:
     """初始化数据库，创建表和索引"""
     conn = get_db_connection()
+    # WAL is persistent database state, so configuring it once at startup
+    # avoids a journal-mode negotiation every time a worker opens a connection.
+    conn.execute("PRAGMA journal_mode=WAL")
     cursor = conn.cursor()
 
     def table_exists(table_name: str) -> bool:
@@ -386,7 +400,7 @@ class DataManager:
                     INSERT INTO books (title, description, cover_path, "group", createTime, lastEditTime)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """, (title, description, cover_path, group, current_time, current_time))
-                return cursor.lastrowid
+                return require_last_insert_id(cursor)
 
     def add_book_from_backup(self, book_data: DBRow) -> int:
         """从备份数据添加书籍"""
@@ -407,7 +421,7 @@ class DataManager:
                     book_data.get('lastEditTime', book_data.get('createTime'))
                 ))
                 if backup_id is None:
-                    return cursor.lastrowid
+                    return require_last_insert_id(cursor)
                 return backup_id
 
     def update_book(self, book_id: int, title: str, description: str, cover_path: str, group: str) -> None:
@@ -437,14 +451,30 @@ class DataManager:
                             ('book', book_id, json.dumps(book_data)))
                 cursor.execute("DELETE FROM books WHERE id = ?", (book_id,))
 
-    def get_chapters_for_book(self, book_id: int) -> List[DBRow]:
-        """获取书籍的所有章节"""
+    def get_chapters_for_book(
+        self,
+        book_id: int,
+        include_content: bool = False,
+    ) -> List[DBRow]:
+        """获取书籍的所有章节。
+
+        ``include_content`` is intentionally opt-in: tree views only need
+        metadata, while backup and export operations need the full text.  This
+        lets the latter fetch all chapter content in one query instead of one
+        additional query per chapter.
+        """
         with self.lock:
             cursor = self.conn.cursor()
-            cursor.execute("""
-                SELECT id, book_id, volume, title, word_count, createTime, lastEditTime, hash
-                FROM chapters WHERE book_id = ? ORDER BY volume, id
-            """, (book_id,))
+            columns = (
+                "id, book_id, volume, title, content, word_count, createTime, "
+                "lastEditTime, hash"
+                if include_content
+                else "id, book_id, volume, title, word_count, createTime, lastEditTime, hash"
+            )
+            cursor.execute(
+                f"SELECT {columns} FROM chapters WHERE book_id = ? ORDER BY volume, id",
+                (book_id,),
+            )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_chapter_details(self, chapter_id: int) -> DBRowOptional:
@@ -493,7 +523,7 @@ class DataManager:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (book_id, volume, title, content, word_count, current_time, current_time, content_hash))
 
-                last_row_id = cursor.lastrowid
+                last_row_id = require_last_insert_id(cursor)
                 book_edit_time = int(datetime.now().timestamp() * 1000)
                 cursor.execute("UPDATE books SET lastEditTime = ? WHERE id = ?", (book_edit_time, book_id))
                 return last_row_id
@@ -521,7 +551,7 @@ class DataManager:
                         (book_id, volume, title, content, word_count, createTime, lastEditTime, hash)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, chapter_values)
-                    return cursor.lastrowid
+                    return require_last_insert_id(cursor)
 
                 cursor.execute("""
                     INSERT INTO chapters
@@ -712,7 +742,7 @@ class DataManager:
                     cursor = self.conn.cursor()
                     cursor.execute("INSERT INTO materials (name, type, description, book_id, content) VALUES (?, ?, ?, ?, ?)",
                                 (name, type, description, book_id, content_json))
-                    return cursor.lastrowid
+                    return require_last_insert_id(cursor)
         except sqlite3.IntegrityError:
             logger.warning(f"添加素材 '{name}' 失败：名称已存在。")
             return None
@@ -809,7 +839,7 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT INTO inspiration_fragments (type, content, source) VALUES (?, ?, ?)",
                             (type, content, source))
-                return cursor.lastrowid
+                return require_last_insert_id(cursor)
 
     def add_inspiration_fragment_from_backup(self, fragment_data: DBRow) -> None:
         """从备份数据添加灵感碎片"""
@@ -872,7 +902,7 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT INTO inspiration_items (title, content, tags, parent_id) VALUES (?, ?, ?, ?)",
                             (title, content, tags, parent_id))
-                return cursor.lastrowid
+                return require_last_insert_id(cursor)
 
     def add_inspiration_item_from_backup(self, item_data: DBRow) -> None:
         """从备份数据添加灵感项"""
@@ -938,7 +968,7 @@ class DataManager:
                 cursor = self.conn.cursor()
                 cursor.execute("INSERT INTO timelines (book_id, name, description) VALUES (?, ?, ?)",
                             (book_id, name, description))
-                return cursor.lastrowid
+                return require_last_insert_id(cursor)
 
     def add_timeline_from_backup(self, timeline_data: DBRow) -> None:
         """从备份数据添加时间轴"""
@@ -1039,7 +1069,12 @@ class DataManager:
         check_time: datetime,
         until_time: Optional[datetime] = None,
     ) -> List[DBRow]:
-        """获取时间窗口内修改的章节。"""
+        """获取时间窗口内修改的章节。
+
+        The lower boundary is intentionally inclusive.  Timestamps are stored
+        in milliseconds, so replaying the boundary once is safer than missing
+        a save that happens in the same millisecond as a snapshot check.
+        """
         with self.lock:
             check_timestamp_ms = int(check_time.timestamp() * 1000)
             until_timestamp_ms = (
@@ -1052,7 +1087,8 @@ class DataManager:
                            b.title as book_title
                     FROM chapters c
                     JOIN books b ON c.book_id = b.id
-                    WHERE c.lastEditTime > ?
+                    WHERE c.lastEditTime >= ?
+                    ORDER BY c.lastEditTime, c.id
                 """, (check_timestamp_ms,))
             else:
                 cursor.execute("""
@@ -1060,7 +1096,8 @@ class DataManager:
                            b.title as book_title
                     FROM chapters c
                     JOIN books b ON c.book_id = b.id
-                    WHERE c.lastEditTime > ? AND c.lastEditTime <= ?
+                    WHERE c.lastEditTime >= ? AND c.lastEditTime <= ?
+                    ORDER BY c.lastEditTime, c.id
                 """, (check_timestamp_ms, until_timestamp_ms))
             return [dict(row) for row in cursor.fetchall()]
 

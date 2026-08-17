@@ -60,6 +60,24 @@ class TestUIRegressions(unittest.TestCase):
         editor.update_highlighter(['角色甲'])
         self.assertEqual(len(editor.highlighter.highlighting_rules), 1)
 
+    def test_unchanged_materials_do_not_rehighlight_document(self):
+        editor = Editor()
+        with patch.object(editor.highlighter, 'rehighlight') as rehighlight:
+            editor.update_highlighter(['角色甲'])
+            initial_call_count = rehighlight.call_count
+            editor.update_highlighter(['角色甲'])
+
+        self.assertEqual(initial_call_count, 1)
+        self.assertEqual(rehighlight.call_count, initial_call_count)
+
+    def test_auto_unindent_removes_a_full_tab_indent(self):
+        editor = Editor()
+        editor.setPlainText('    indented text')
+
+        editor.auto_unindent_document()
+
+        self.assertEqual(editor.toPlainText(), 'indented text')
+
     def test_inspiration_edit_updates_content_not_type(self):
         data_manager = InspirationDataManagerStub()
         panel = InspirationKitPanel(data_manager)

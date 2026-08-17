@@ -37,20 +37,28 @@ class MaterialHighlighter(QSyntaxHighlighter):
         """
         super().__init__(parent)
         self.highlighting_rules: List[HighlightingRule] = []
-
         self.highlight_format = QTextCharFormat()
-        self.update_highlight_color()
 
-        # 缓存优化
-        self._current_materials_hash: Optional[int] = None
-        self._cached_pattern: Optional[QRegularExpression] = None
-        self._cached_materials_list: Optional[List[str]] = None
+        # Store normalized input rather than a hash: this avoids rebuilding a
+        # large document's syntax highlighting when the effective material
+        # list and theme have not changed.
+        self._materials_key: Tuple[str, ...] = ()
+        self._is_dark_theme: Optional[bool] = None
+        self.update_highlight_color()
 
     def update_highlight_color(self) -> None:
         """根据当前主题更新高亮颜色"""
-        palette = QApplication.instance().palette()
+        application = QApplication.instance()
+        if application is None:
+            return
+
+        palette = application.palette()
         # 简单的暗色主题检测
         is_dark_theme = palette.window().color().lightness() < 128
+        if self._is_dark_theme == is_dark_theme:
+            return
+
+        self._is_dark_theme = is_dark_theme
 
         if is_dark_theme:
             # 暗色模式：深蓝背景，亮灰字，柔和护眼
@@ -72,40 +80,32 @@ class MaterialHighlighter(QSyntaxHighlighter):
         Args:
             materials_list: 素材名称列表
         """
-        # 检查材料列表是否实际发生变化
-        if materials_list is None:
-            materials_list = []
-
-        # 快速路径：如果列表为空，直接清除高亮
-        if not materials_list:
-            if self._current_materials_hash is not None:
-                self.highlighting_rules = []
-                self._current_materials_hash = None
-                self._cached_pattern = None
-                self._cached_materials_list = None
-                self.rehighlight()
+        normalized_materials = tuple(
+            sorted(
+                {
+                    material
+                    for material in (materials_list or [])
+                    if material and material.strip()
+                },
+                key=lambda material: (-len(material), material),
+            )
+        )
+        if normalized_materials == self._materials_key:
             return
 
-        # 计算当前列表的哈希（使用 frozenset 提高性能）
-        materials_set = frozenset(materials_list)
-        new_hash = hash(materials_set)
-
-        # 如果哈希相同，跳过更新
-        if self._current_materials_hash == new_hash:
-            return
-
+        self._materials_key = normalized_materials
         self.highlighting_rules = []
 
-        # 1. 按长度降序排序，防止短词覆盖长词
-        sorted_by_length = sorted(materials_list, key=len, reverse=True)
+        # 快速路径：如果列表为空，直接清除高亮。
+        if not normalized_materials:
+            self.rehighlight()
+            return
 
-        # 2. 分离 ASCII (需要 \b) 和 非 ASCII (不需要 \b) 关键词
+        # 按长度降序排序，防止短词覆盖长词；ASCII 关键词需要单词边界。
         ascii_keywords: List[str] = []
         non_ascii_keywords: List[str] = []
 
-        for m in sorted_by_length:
-            if not m or not m.strip():
-                continue
+        for m in normalized_materials:
             # 使用 str.isascii() 方法（Python 3.7+）更高效
             if m.isascii():
                 ascii_keywords.append(QRegularExpression.escape(m))
@@ -129,11 +129,6 @@ class MaterialHighlighter(QSyntaxHighlighter):
         # 任意素材关键词时抛出 AttributeError。
         pattern = QRegularExpression(pattern_str)
         self.highlighting_rules.append((pattern, self.highlight_format))
-
-        # 更新缓存
-        self._current_materials_hash = new_hash
-        self._cached_pattern = pattern
-        self._cached_materials_list = sorted(materials_list)
 
         self.rehighlight()
 
@@ -255,13 +250,13 @@ class Editor(QTextEdit):
 
             cursor.setPosition(block.position())
 
-            if text.startswith("  "):
-                # 选中前两个字符并删除
-                cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 2)
-                cursor.removeSelectedText()
-            elif text.startswith("    "):
+            if text.startswith("    "):
                 # 选中前四个字符并删除
                 cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 4)
+                cursor.removeSelectedText()
+            elif text.startswith("  "):
+                # 选中前两个字符并删除
+                cursor.movePosition(QTextCursor.Right, QTextCursor.KeepAnchor, 2)
                 cursor.removeSelectedText()
 
         cursor.endEditBlock()

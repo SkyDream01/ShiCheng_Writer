@@ -5,6 +5,7 @@ import tempfile
 import json
 import zipfile
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from modules.database import DataManager, initialize_database
 import modules.database as database_module
 from modules.backup import BackupManager, BackupWorker
@@ -84,6 +85,54 @@ class TestBackupLogic(unittest.TestCase):
                 materials = json.load(f)
                 self.assertEqual(len(materials), 1)
                 self.assertEqual(materials[0]['name'], "Mat1")
+
+    def test_full_backup_fetches_chapter_text_in_bulk(self):
+        self.data_manager.add_chapter(self.book_id, "Vol 1", "Chapter 2")
+
+        with patch.object(
+            self.data_manager,
+            'get_chapter_content',
+            wraps=self.data_manager.get_chapter_content,
+        ) as get_chapter_content:
+            zip_path = BackupWorker('stage', self.backup_dir)._create_zip(
+                self.data_manager,
+                "bulk_content_",
+            )
+
+        self.assertIsNotNone(zip_path)
+        get_chapter_content.assert_not_called()
+
+    def test_backup_filenames_do_not_overwrite_same_second_backups(self):
+        worker = BackupWorker('stage', self.backup_dir)
+        fixed_time = datetime(2026, 1, 1, 12, 0, 0)
+
+        with patch('modules.backup.datetime') as backup_datetime:
+            backup_datetime.now.return_value = fixed_time
+            first_path = worker._create_zip(self.data_manager, "same_second_")
+            second_path = worker._create_zip(self.data_manager, "same_second_")
+
+        self.assertIsNotNone(first_path)
+        self.assertIsNotNone(second_path)
+        self.assertNotEqual(first_path, second_path)
+        self.assertTrue(os.path.exists(first_path))
+        self.assertTrue(os.path.exists(second_path))
+
+    def test_stale_worker_result_does_not_change_active_backup_state(self):
+        manager = BackupManager(self.data_manager, self.backup_dir)
+        stale_worker = BackupWorker('snapshot', self.backup_dir)
+        active_worker = BackupWorker('stage', self.backup_dir)
+        manager._current_worker = active_worker
+        manager._pending_snapshot_check_time = datetime(2026, 1, 1, 12, 0, 0)
+        previous_check_time = manager.last_snapshot_check_time
+
+        manager._on_worker_finished(
+            True,
+            'stale complete',
+            worker=stale_worker,
+        )
+
+        self.assertEqual(manager.last_snapshot_check_time, previous_check_time)
+        self.assertIsNotNone(manager._pending_snapshot_check_time)
 
     def test_chapter_content_files_use_stable_ids(self):
         second_chapter_id = self.data_manager.add_chapter(
